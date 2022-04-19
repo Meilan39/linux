@@ -8,6 +8,7 @@
 #include <linux/pkeys.h>                /* PKEY_*                       */
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
+#include <linux/memremap.h>		  /* fault callback               */
 #include <uapi/asm-generic/mman-common.h>
 
 #include <asm/cpufeature.h>             /* boot_cpu_has, ...            */
@@ -243,7 +244,11 @@ static DEFINE_PER_CPU(u32, pkrs_cache);
  *	#endif
  *	};
  */
-static const pks_key_callback pks_key_callbacks[PKS_KEY_MAX] = { 0 };
+static const pks_key_callback pks_key_callbacks[PKS_KEY_MAX] = {
+#ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
+	[PKS_KEY_PGMAP_PROTECTION]   = pgmap_pks_fault_callback,
+#endif
+};
 
 static bool pks_call_fault_callback(struct pt_regs *regs, unsigned long address,
 				    bool write, u16 key)
