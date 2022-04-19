@@ -248,6 +248,9 @@ static const pks_key_callback pks_key_callbacks[PKS_KEY_MAX] = {
 #ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
 	[PKS_KEY_PGMAP_PROTECTION]   = pgmap_pks_fault_callback,
 #endif
+#ifdef CONFIG_PKS_TEST
+	[PKS_KEY_TEST]		= pks_test_fault_callback,
+#endif
 };
 
 static bool pks_call_fault_callback(struct pt_regs *regs, unsigned long address,
