@@ -59,8 +59,14 @@ static inline void pks_update_exception(struct pt_regs *regs,
 
 #ifdef CONFIG_PKS_TEST
 
+#define __static_or_pks_test
+
 bool pks_test_fault_callback(struct pt_regs *regs, unsigned long address,
 			     bool write);
+
+#else /* !CONFIG_PKS_TEST */
+
+#define __static_or_pks_test static
 
 #endif /* CONFIG_PKS_TEST */
 
