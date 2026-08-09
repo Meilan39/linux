@@ -512,6 +512,7 @@ struct thread_struct {
 	 * PKRU is the hardware itself.
 	 */
 	u32			pkru;
+	u32			pkrs;
 
 #ifdef CONFIG_X86_USER_SHADOW_STACK
 	unsigned long		features;

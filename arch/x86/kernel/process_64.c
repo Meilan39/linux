@@ -371,6 +371,21 @@ static __always_inline void load_seg_legacy(unsigned short prev_index,
  * lookup in the task's FPU xsave buffer and require to keep that updated
  * in various places.
  */
+static __always_inline void x86_pkrs_load(struct thread_struct *prev,
+					  struct thread_struct *next)
+{
+	u64 pkrs;
+
+	/* copy previous pkrs value to prev->pkrs */
+	rdmsrl(MSR_IA32_PKRS, pkrs);
+	prev->pkrs = pkrs;
+
+	/* update only if different */
+	if (prev->pkrs != next->pkrs)
+		wrmsrl(MSR_IA32_PKRS, next->pkrs);
+}
+
+
 static __always_inline void x86_pkru_load(struct thread_struct *prev,
 					  struct thread_struct *next)
 {
@@ -663,6 +678,7 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	x86_fsgsbase_load(prev, next);
 
 	x86_pkru_load(prev, next);
+	x86_pkrs_load(prev, next);
 
 	/*
 	 * Switch the PDA and FPU contexts.

@@ -1134,12 +1134,13 @@ static void
 do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
 		   unsigned long address)
 {
-	/*
-	 * Protection keys exceptions only happen on user pages.  We
-	 * have no user pages in the kernel portion of the address
-	 * space, so do not expect them here.
-	 */
-	WARN_ON_ONCE(hw_error_code & X86_PF_PK);
+	/* ADD THIS: Catch PKS violations and terminate the exploit */
+	if (unlikely(hw_error_code & X86_PF_PK)) {
+		pr_err("PKS write-protection violation caught at %p!\n", (void *)address);
+		if (!in_interrupt()) {
+			do_exit(SIGKILL); // Gracefully kill the process instead of Oopsing
+		}
+	}
 
 #ifdef CONFIG_X86_32
 	/*

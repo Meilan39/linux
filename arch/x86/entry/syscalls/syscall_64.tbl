@@ -396,6 +396,8 @@
 469	common	file_setattr		sys_file_setattr
 470	common	listns			sys_listns
 471	common	rseq_slice_yield	sys_rseq_slice_yield
+472	common	pks_file_set		sys_pks_file_set
+473	common	pks_set			sys_pks_set
 
 #
 # Due to a historical design error, certain syscalls are numbered differently
