@@ -1,6 +1,8 @@
 #include <sys/syscall.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 /* Replace with the actual syscall numbers you used in the kernel */
 #ifndef SYS_pks_file_set
@@ -16,10 +18,13 @@ int pks_protection() {
         return 1;
     }
     
-    // Force the file into the page cache
-    char dummy;
-    if (read(pks_fd, &dummy, 1) < 0) {
-        perror("read target");
+	// Cache entier file 
+    struct stat st;
+    fstat(pks_fd, &st);
+    char *dummy_buf = malloc(st.st_size);
+    if (dummy_buf) {
+        read(pks_fd, dummy_buf, st.st_size);
+        free(dummy_buf);
     }
     
     // Assign /usr/bin/su to Key 1
