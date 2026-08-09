@@ -241,6 +241,15 @@ SYSCALL_DEFINE2(pks_file_set, int, fd, int, key)
 		pte = lookup_address(address, &level);
 
 		if (pte) {
+			/* If the page is mapped as a huge page, split it! */
+			if (level != PG_LEVEL_4K) {
+				set_memory_4k(address, 1);
+				
+				/* Re-lookup to get the brand new 4KB PTE */
+				pte = lookup_address(address, &level);
+				if (!pte) continue;
+			}
+
 			pte_t new_pte;
 			unsigned long pteval = pte_val(*pte);
 
