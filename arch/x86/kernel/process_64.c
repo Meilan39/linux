@@ -374,15 +374,18 @@ static __always_inline void load_seg_legacy(unsigned short prev_index,
 static __always_inline void x86_pkrs_load(struct thread_struct *prev,
 					  struct thread_struct *next)
 {
-	u64 pkrs;
+	/* Force the MSR to ALWAYS restrict Key 1 (Bit 3), regardless of the thread */
+	wrmsrl(MSR_IA32_PKRS, 0x00000008);
+
+	// u64 pkrs;
 
 	/* copy previous pkrs value to prev->pkrs */
-	rdmsrl(MSR_IA32_PKRS, pkrs);
-	prev->pkrs = pkrs;
+	// rdmsrl(MSR_IA32_PKRS, pkrs);
+	// prev->pkrs = pkrs;
 
-	/* update only if different */
-	if (prev->pkrs != next->pkrs)
-		wrmsrl(MSR_IA32_PKRS, next->pkrs);
+	// /* update only if different */
+	// if (prev->pkrs != next->pkrs)
+	// 	wrmsrl(MSR_IA32_PKRS, next->pkrs);
 }
 
 
