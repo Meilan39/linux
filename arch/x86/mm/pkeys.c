@@ -11,6 +11,15 @@
 #include <asm/cpufeature.h>             /* boot_cpu_has, ...            */
 #include <asm/mmu_context.h>            /* vma_pkey()                   */
 
+#include <linux/syscalls.h>
+#include <linux/file.h>
+#include <linux/fs.h>
+#include <linux/pagemap.h>
+#include <asm/tlbflush.h>
+#include <asm/pgtable.h>
+#include <asm/processor.h>
+#include <asm/msr.h>
+
 int __execute_only_pkey(struct mm_struct *mm)
 {
 	bool need_to_set_mm_pkey = false;
@@ -194,3 +203,93 @@ static __init int setup_init_pkru(char *opt)
 	return 1;
 }
 __setup("init_pkru=", setup_init_pkru);
+
+SYSCALL_DEFINE2(pks_file_set, int, fd, int, key)
+{
+	struct fd f;
+	struct address_space *mapping;
+	pgoff_t index;
+	struct folio *folio;
+
+	/* Ensure key is in valid range */
+	if (key < 0 || key > 15)
+		return -EINVAL;
+
+	/* get file from user file table */
+	f = fdget(fd);
+	if (fd_empty(f))
+		return -EBADF;
+
+	mapping = fd_file(f)->f_mapping;
+	if (!mapping) {
+		fdput(f);
+		return -EINVAL;
+	}
+
+	rcu_read_lock();
+	xa_for_each(&mapping->i_pages, index, folio) {
+		unsigned int level;
+		pte_t *pte;
+		unsigned long address;
+
+		/* non-anonymous file pages only */
+		if (xa_is_value(folio))
+			continue;
+
+		/* get pte from folio */
+		address = (unsigned long)folio_address(folio);
+		pte = lookup_address(address, &level);
+
+		if (pte) {
+			pte_t new_pte;
+			unsigned long pteval = pte_val(*pte);
+
+			/* reset and set PTE key bits */
+			pteval &= ~_PAGE_PKEY_MASK;
+			pteval |= ((u64)key << _PAGE_BIT_PKEY_BIT0);
+
+			new_pte.pte = pteval;
+			set_pte_atomic(pte, new_pte);
+		}
+	}
+	rcu_read_unlock();
+
+	/* flush tlb after update */
+	flush_tlb_all();
+
+	fdput(f);
+	return 0;
+}
+
+SYSCALL_DEFINE3(pks_set, int, key, int, ad, int, wd)
+{
+	u64 pkrs_val;
+	u32 pkrs;
+	int shift = key * 2;
+
+	/* Ensure key is in valid range */
+	if (key < 0 || key > 15)
+		return -EINVAL;
+
+	/* Enable PKS if not already */
+	cr4_set_bits(X86_CR4_PKS);
+
+	/* read pkrs  */
+	rdmsrl(MSR_IA32_PKRS, pkrs_val);
+	pkrs = (u32)pkrs_val;
+
+	/* reset permissions for key */
+	pkrs &= ~(3U << shift);
+
+	/* set permissions for key */
+	if (ad)
+		pkrs |= (1U << shift);
+	if (wd)
+		pkrs |= (2U << shift);
+
+	/* update metadata and writeback */
+	current->thread.pkrs = pkrs;
+	wrmsrl(MSR_IA32_PKRS, pkrs);
+
+	return 0;
+}
