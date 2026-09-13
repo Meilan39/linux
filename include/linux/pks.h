@@ -2,16 +2,15 @@
 #ifndef _LINUX_PKS_H
 #define _LINUX_PKS_H
 
-#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
-
 #include <linux/types.h>
-
 #include <uapi/asm-generic/mman-common.h>
+
+#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
 
 #include <asm/pks.h>
 
 bool pks_available(void);
-void pks_update_protection(u8 pkey, u8 protection);
+u8 pks_update_protection(u8 pkey, u8 protection);
 void pks_update_exception(struct pt_regs *regs, u8 pkey, u8 protection);
 
 /**
@@ -48,6 +47,10 @@ static inline bool pks_available(void)
 	return false;
 }
 
+static inline u8 pks_update_protection(u8 pkey, u8 protection)
+{
+	return PKEY_READ_WRITE;
+}
 static inline void pks_set_noaccess(u8 pkey) {}
 static inline void pks_set_readwrite(u8 pkey) {}
 static inline void pks_update_exception(struct pt_regs *regs,

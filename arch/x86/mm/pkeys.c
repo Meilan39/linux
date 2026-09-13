@@ -423,38 +423,25 @@ void pks_setup(void)
 	cr4_set_bits(X86_CR4_PKS);
 }
 
-static void __pks_update_protection(u8 pkey, u8 protection)
+u8 pks_update_protection(u8 pkey, u8 protection)
 {
 	u32 pkrs;
+	u8 old;
 
-	pkrs = current->thread.pkrs;
-	current->thread.pkrs = pkey_update_pkval(pkrs, pkey, protection);
-
-	preempt_disable();
-	pks_write_pkrs(current->thread.pkrs);
-	preempt_enable();
-}
-
-/*
- * Do not call this directly, see pks_set*().
- *
- * @pkey: Key for the domain to change
- * @protection: protection bits to be used
- *
- * Protection utilizes the same protection bits specified for User pkeys
- *     PKEY_DISABLE_ACCESS
- *     PKEY_DISABLE_WRITE
- *
- */
-void pks_update_protection(u8 pkey, u8 protection)
-{
 	if (!cpu_feature_enabled(X86_FEATURE_PKS))
-		return;
+		return PKEY_READ_WRITE;
 
 	if (WARN_ON_ONCE(pkey >= PKS_KEY_MAX))
-		return;
+		return PKEY_READ_WRITE;
 
-	__pks_update_protection(pkey, protection);
+	preempt_disable();
+	pkrs = current->thread.pkrs;
+	old = (pkrs >> PKR_PKEY_SHIFT(pkey)) & PKEY_ACCESS_MASK;
+	current->thread.pkrs = pkey_update_pkval(pkrs, pkey, protection);
+	pks_write_pkrs(current->thread.pkrs);
+	preempt_enable();
+
+	return old;
 }
 EXPORT_SYMBOL_GPL(pks_update_protection);
 
@@ -487,7 +474,7 @@ void pks_update_exception(struct pt_regs *regs, u8 pkey, u8 protection)
 	if (WARN_ON_ONCE(pkey >= PKS_KEY_MAX))
 		return;
 
-	__pks_update_protection(pkey, protection);
+	pks_update_protection(pkey, protection);
 
 	ept_regs = to_extended_pt_regs(regs);
 	old = ept_regs->aux.pkrs;
