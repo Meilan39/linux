@@ -27,6 +27,7 @@
 #include <linux/tick.h>
 #include <linux/irq.h>
 #include <linux/wait_bit.h>
+#include <linux/pcache_pks.h>
 
 #include <asm/softirq_stack.h>
 
@@ -514,6 +515,7 @@ static inline void lockdep_softirq_end(bool in_hardirq) { }
 
 asmlinkage __visible void __softirq_entry __do_softirq(void)
 {
+	struct pcache_pks_scope pks_scope;
 	unsigned long end = jiffies + MAX_SOFTIRQ_TIME;
 	unsigned long old_flags = current->flags;
 	int max_restart = MAX_SOFTIRQ_RESTART;
@@ -534,6 +536,8 @@ asmlinkage __visible void __softirq_entry __do_softirq(void)
 	softirq_handle_begin();
 	in_hardirq = lockdep_softirq_start();
 	account_softirq_enter(current);
+	pcache_pks_scope_clamp(&pks_scope,
+			       static_branch_unlikely(&pcache_pks_enabled));
 
 restart:
 	/* Reset the pending bitmask before enabling irqs */
@@ -582,6 +586,7 @@ restart:
 		wakeup_softirqd();
 	}
 
+	pcache_pks_scope_end(&pks_scope);
 	account_softirq_exit(current);
 	lockdep_softirq_end(in_hardirq);
 	softirq_handle_end();
