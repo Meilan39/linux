@@ -33,6 +33,7 @@
 #include <linux/dnotify.h>
 #include <linux/compat.h>
 #include <linux/mnt_idmapping.h>
+#include <linux/pcache_pks.h>
 
 #include "internal.h"
 
@@ -305,7 +306,14 @@ int vfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		return -EOPNOTSUPP;
 
 	file_start_write(file);
-	ret = file->f_op->fallocate(file, mode, offset, len);
+	{
+		struct pcache_pks_scope pks_scope;
+
+		pcache_pks_count_scope(pcache_pks_file(file));
+		pcache_pks_scope_begin(&pks_scope, pcache_pks_file(file));
+		ret = file->f_op->fallocate(file, mode, offset, len);
+		pcache_pks_scope_end(&pks_scope);
+	}
 
 	/*
 	 * Create inotify and fanotify events.
