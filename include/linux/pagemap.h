@@ -199,6 +199,7 @@ enum mapping_flags {
 	/* writeback related tags are not used */
 	AS_NO_WRITEBACK_TAGS = 5,
 	AS_LARGE_FOLIO_SUPPORT = 6,
+	AS_PKS_PROTECTED = 7,
 };
 
 /**
@@ -314,6 +315,16 @@ static inline bool mapping_large_folio_support(struct address_space *mapping)
 {
 	return IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) &&
 		test_bit(AS_LARGE_FOLIO_SUPPORT, &mapping->flags);
+}
+
+static inline void mapping_set_pks_protected(struct address_space *mapping)
+{
+	__set_bit(AS_PKS_PROTECTED, &mapping->flags);
+}
+
+static inline bool mapping_pks_protected(const struct address_space *mapping)
+{
+	return mapping && test_bit(AS_PKS_PROTECTED, &mapping->flags);
 }
 
 static inline int filemap_nr_thps(struct address_space *mapping)
@@ -477,6 +488,17 @@ static inline struct folio *filemap_alloc_folio(gfp_t gfp, unsigned int order)
 }
 #endif
 
+#include <linux/pcache_pks.h>
+
+static inline struct folio *
+filemap_alloc_folio_for_mapping(struct address_space *mapping, gfp_t gfp,
+				unsigned int order)
+{
+	if (mapping_pks_protected(mapping))
+		return pcache_pks_alloc_folio(gfp, order);
+	return filemap_alloc_folio(gfp, order);
+}
+
 static inline struct page *__page_cache_alloc(gfp_t gfp)
 {
 	return &filemap_alloc_folio(gfp, 0)->page;
@@ -484,7 +506,10 @@ static inline struct page *__page_cache_alloc(gfp_t gfp)
 
 static inline struct page *page_cache_alloc(struct address_space *x)
 {
-	return __page_cache_alloc(mapping_gfp_mask(x));
+	struct folio *folio = filemap_alloc_folio_for_mapping(x,
+						mapping_gfp_mask(x), 0);
+
+	return folio ? &folio->page : NULL;
 }
 
 static inline gfp_t readahead_gfp_mask(struct address_space *x)

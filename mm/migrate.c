@@ -50,6 +50,7 @@
 #include <linux/memory.h>
 #include <linux/random.h>
 #include <linux/sched/sysctl.h>
+#include <linux/pcache_pks.h>
 
 #include <asm/tlbflush.h>
 
@@ -356,6 +357,10 @@ int folio_migrate_mapping(struct address_space *mapping,
 	int dirty;
 	int expected_count = expected_page_refs(mapping, &folio->page) + extra_count;
 	long nr = folio_nr_pages(folio);
+
+	if (pcache_pks_validate_folio(mapping, newfolio) ||
+	    pcache_pks_validate_folio(mapping, folio))
+		return -EBUSY;
 
 	if (!mapping) {
 		/* Anonymous page without mapping */
