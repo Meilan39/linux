@@ -1504,6 +1504,9 @@ ssize_t vfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	if (unlikely(ret))
 		return ret;
 
+	if (pcache_pks_file(file_out))
+		return -EOPNOTSUPP;
+
 	if (len == 0)
 		return 0;
 
