@@ -20,6 +20,7 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
+#include <linux/pcache_pks.h>
 #include "internal.h"
 
 #include <linux/uaccess.h>
@@ -519,6 +520,9 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	struct iov_iter iter;
 	ssize_t ret;
 
+	if (pcache_pks_file(file))
+		return -EOPNOTSUPP;
+
 	if (WARN_ON_ONCE(!(file->f_mode & FMODE_WRITE)))
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_WRITE))
@@ -570,6 +574,7 @@ EXPORT_SYMBOL(kernel_write);
 
 ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
+	struct pcache_pks_scope pks_scope;
 	ssize_t ret;
 
 	if (!(file->f_mode & FMODE_WRITE))
@@ -585,12 +590,15 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 	if (count > MAX_RW_COUNT)
 		count =  MAX_RW_COUNT;
 	file_start_write(file);
+	pcache_pks_scope_begin(&pks_scope, pcache_pks_file(file),
+			       PKEY_READ_WRITE);
 	if (file->f_op->write)
 		ret = file->f_op->write(file, buf, count, pos);
 	else if (file->f_op->write_iter)
 		ret = new_sync_write(file, buf, count, pos);
 	else
 		ret = -EINVAL;
+	pcache_pks_scope_end(&pks_scope);
 	if (ret > 0) {
 		fsnotify_modify(file);
 		add_wchar(current, ret);
@@ -831,10 +839,14 @@ ssize_t vfs_iter_read(struct file *file, struct iov_iter *iter, loff_t *ppos,
 EXPORT_SYMBOL(vfs_iter_read);
 
 static ssize_t do_iter_write(struct file *file, struct iov_iter *iter,
-		loff_t *pos, rwf_t flags)
+		loff_t *pos, rwf_t flags, bool authorize_user_write)
 {
+	struct pcache_pks_scope pks_scope;
 	size_t tot_len;
 	ssize_t ret = 0;
+
+	if (pcache_pks_file(file) && !authorize_user_write)
+		return -EOPNOTSUPP;
 
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
@@ -848,10 +860,14 @@ static ssize_t do_iter_write(struct file *file, struct iov_iter *iter,
 	if (ret < 0)
 		return ret;
 
+	pcache_pks_scope_begin(&pks_scope,
+			       authorize_user_write && pcache_pks_file(file),
+			       PKEY_READ_WRITE);
 	if (file->f_op->write_iter)
 		ret = do_iter_readv_writev(file, iter, pos, WRITE, flags);
 	else
 		ret = do_loop_readv_writev(file, iter, pos, WRITE, flags);
+	pcache_pks_scope_end(&pks_scope);
 	if (ret > 0)
 		fsnotify_modify(file);
 	return ret;
@@ -862,6 +878,9 @@ ssize_t vfs_iocb_iter_write(struct file *file, struct kiocb *iocb,
 {
 	size_t tot_len;
 	ssize_t ret = 0;
+
+	if (pcache_pks_file(file))
+		return -EOPNOTSUPP;
 
 	if (!file->f_op->write_iter)
 		return -EINVAL;
@@ -888,9 +907,11 @@ EXPORT_SYMBOL(vfs_iocb_iter_write);
 ssize_t vfs_iter_write(struct file *file, struct iov_iter *iter, loff_t *ppos,
 		rwf_t flags)
 {
+	if (pcache_pks_file(file))
+		return -EOPNOTSUPP;
 	if (!file->f_op->write_iter)
 		return -EINVAL;
-	return do_iter_write(file, iter, ppos, flags);
+	return do_iter_write(file, iter, ppos, flags, false);
 }
 EXPORT_SYMBOL(vfs_iter_write);
 
@@ -922,7 +943,7 @@ static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
 	ret = import_iovec(WRITE, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
 	if (ret >= 0) {
 		file_start_write(file);
-		ret = do_iter_write(file, &iter, pos, flags);
+		ret = do_iter_write(file, &iter, pos, flags, true);
 		file_end_write(file);
 		kfree(iov);
 	}

@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/sched/mm.h>
+#include <linux/pcache_pks.h>
 
 #include "ext4_jbd2.h"
 #include "xattr.h"
@@ -458,8 +459,14 @@ int ext4_bio_write_page(struct ext4_io_submit *io,
 	 * the page size, the remaining memory is zeroed when mapped, and
 	 * writes to that region are not written out to the file."
 	 */
-	if (len < PAGE_SIZE)
+	if (len < PAGE_SIZE) {
+		struct pcache_pks_scope pks_scope;
+
+		pcache_pks_scope_begin(&pks_scope, pcache_pks_page(page),
+				       PKEY_READ_WRITE);
 		zero_user_segment(page, len, PAGE_SIZE);
+		pcache_pks_scope_end(&pks_scope);
+	}
 	/*
 	 * In the first loop we prepare and mark buffers to submit. We have to
 	 * mark all buffers in the page before submitting so that

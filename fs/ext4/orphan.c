@@ -4,6 +4,7 @@
 #include <linux/fs.h>
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
+#include <linux/pcache_pks.h>
 
 #include "ext4.h"
 #include "ext4_jbd2.h"
@@ -328,6 +329,8 @@ static void ext4_process_orphan(struct inode *inode,
 
 	dquot_initialize(inode);
 	if (inode->i_nlink) {
+		struct pcache_pks_scope pks_scope;
+
 		if (test_opt(sb, DEBUG))
 			ext4_msg(sb, KERN_DEBUG,
 				"%s: truncating inode %lu to %lld bytes",
@@ -335,8 +338,12 @@ static void ext4_process_orphan(struct inode *inode,
 		jbd_debug(2, "truncating inode %lu to %lld bytes\n",
 			  inode->i_ino, inode->i_size);
 		inode_lock(inode);
+		pcache_pks_scope_begin(&pks_scope,
+				       pcache_pks_mapping(inode->i_mapping),
+				       PKEY_READ_WRITE);
 		truncate_inode_pages(inode->i_mapping, inode->i_size);
 		ret = ext4_truncate(inode);
+		pcache_pks_scope_end(&pks_scope);
 		if (ret) {
 			/*
 			 * We need to clean up the in-core orphan list
