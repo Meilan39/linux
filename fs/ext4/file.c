@@ -30,6 +30,7 @@
 #include <linux/uio.h>
 #include <linux/mman.h>
 #include <linux/backing-dev.h>
+#include <linux/pcache_pks.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "xattr.h"
@@ -118,6 +119,9 @@ static ssize_t ext4_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
 	if (unlikely(ext4_forced_shutdown(EXT4_SB(inode->i_sb))))
 		return -EIO;
+
+	if ((iocb->ki_flags & IOCB_DIRECT) && pcache_pks_file(iocb->ki_filp))
+		return -EOPNOTSUPP;
 
 	if (!iov_iter_count(to))
 		return 0; /* skip atime */
@@ -669,6 +673,10 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (unlikely(ext4_forced_shutdown(EXT4_SB(inode->i_sb))))
 		return -EIO;
 
+	if (pcache_pks_file(iocb->ki_filp) &&
+	    ((iocb->ki_flags & IOCB_DIRECT) || !is_sync_kiocb(iocb)))
+		return -EOPNOTSUPP;
+
 #ifdef CONFIG_FS_DAX
 	if (IS_DAX(inode))
 		return ext4_dax_write_iter(iocb, from);
@@ -770,6 +778,12 @@ static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 	if (unlikely(ext4_forced_shutdown(sbi)))
 		return -EIO;
 
+	if (pcache_pks_file(file)) {
+		if (vma->vm_flags & VM_WRITE)
+			return -EOPNOTSUPP;
+		vma->vm_flags &= ~VM_MAYWRITE;
+	}
+
 	/*
 	 * We don't support synchronous mappings for non-DAX files and
 	 * for DAX files if underneath dax_device is not synchronous.
@@ -845,6 +859,9 @@ static int ext4_file_open(struct inode *inode, struct file *filp)
 
 	if (unlikely(ext4_forced_shutdown(EXT4_SB(inode->i_sb))))
 		return -EIO;
+
+	if ((filp->f_flags & O_DIRECT) && pcache_pks_file(filp))
+		return -EOPNOTSUPP;
 
 	ret = ext4_sample_last_mounted(inode->i_sb, filp->f_path.mnt);
 	if (ret)
