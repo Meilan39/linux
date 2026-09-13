@@ -7,6 +7,8 @@
 #include <linux/jump_label.h>
 #include <linux/mm_types.h>
 
+struct address_space;
+struct file;
 struct pt_regs;
 
 #ifdef CONFIG_PCACHE_PKS
@@ -17,6 +19,11 @@ void pcache_pks_pool_reserve(void);
 bool pcache_pks_page(struct page *page);
 struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order);
 void pcache_pks_recycle_page(struct page *page);
+bool pcache_pks_mapping(const struct address_space *mapping);
+bool pcache_pks_file(const struct file *file);
+int pcache_pks_reject_file(const struct file *file);
+int pcache_pks_validate_folio(const struct address_space *mapping,
+			      struct folio *folio);
 bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
 			       bool write);
 
@@ -70,6 +77,11 @@ static inline struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order
 	return NULL;
 }
 static inline void pcache_pks_recycle_page(struct page *page) {}
+static inline bool pcache_pks_mapping(const struct address_space *mapping) { return false; }
+static inline bool pcache_pks_file(const struct file *file) { return false; }
+static inline int pcache_pks_reject_file(const struct file *file) { return 0; }
+static inline int pcache_pks_validate_folio(const struct address_space *mapping,
+					    struct folio *folio) { return 0; }
 
 struct pcache_pks_scope {
 	u8 old;
