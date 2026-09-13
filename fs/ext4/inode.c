@@ -24,6 +24,7 @@
 #include <linux/time.h>
 #include <linux/highuid.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/dax.h>
 #include <linux/quotaops.h>
 #include <linux/string.h>
@@ -3687,6 +3688,14 @@ void ext4_set_aops(struct inode *inode)
 		inode->i_mapping->a_ops = &ext4_da_aops;
 	else
 		inode->i_mapping->a_ops = &ext4_aops;
+
+	if (S_ISREG(inode->i_mode) &&
+	    inode->i_ino >= EXT4_FIRST_INO(inode->i_sb) &&
+	    !ext4_is_quota_file(inode) &&
+	    !ext4_test_inode_flag(inode, EXT4_INODE_EA_INODE) &&
+	    test_opt2(inode->i_sb, PKS_PAGECACHE) &&
+	    static_branch_unlikely(&pcache_pks_enabled))
+		mapping_set_pks_protected(inode->i_mapping);
 }
 
 static int __ext4_block_zero_page_range(handle_t *handle,
