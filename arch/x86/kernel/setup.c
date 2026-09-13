@@ -19,6 +19,7 @@
 #include <linux/pci.h>
 #include <linux/root_dev.h>
 #include <linux/hugetlb.h>
+#include <linux/pcache_pks.h>
 #include <linux/tboot.h>
 #include <linux/usb/xhci-dbgp.h>
 #include <linux/static_call.h>
@@ -1086,6 +1087,7 @@ void __init setup_arch(char **cmdline_p)
 	 * crashkernel the entire 1M is reserved anyway.
 	 */
 	reserve_real_mode();
+	pcache_pks_pool_reserve();
 
 	init_mem_mapping();
 

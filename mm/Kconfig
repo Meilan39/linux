@@ -797,6 +797,30 @@ config ZONE_DEVICE
 
 	  If FS_DAX is enabled, then say Y.
 
+config PCACHE_PKS
+	bool "PKS page cache protection (EXPERIMENTAL)"
+	depends on X86_64 && ARCH_HAS_SUPERVISOR_PKEYS
+	select ARCH_ENABLE_PKS_CONSUMER
+	depends on !HIGHMEM
+	depends on !PAGE_POISONING
+	depends on !DEBUG_PAGEALLOC
+	depends on !INIT_ON_ALLOC_DEFAULT_ON
+	depends on !INIT_ON_FREE_DEFAULT_ON
+	depends on !HIBERNATION
+	help
+	  This option implements an experimental PKS-protected page cache pool
+	  for ext4 mappings to prevent cross-subsystem privilege confusion.
+
+config PCACHE_PKS_DEBUG
+	bool "PKS page cache debug counters and diagnostics"
+	depends on PCACHE_PKS && DEBUG_FS
+	default n
+	help
+	  Enables in-kernel atomic scope counters and a DebugFS status file
+	  (/sys/kernel/debug/pcache_pks/status) for verifying VFS write scoping
+	  and static pool folio allocations.
+	  Leave disabled for production and performance benchmarking.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN
