@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/mm.h>
 #include <linux/memblock.h>
+#include <linux/pagemap.h>
+#include <linux/fs.h>
 #include <linux/pcache_pks.h>
 #include <linux/spinlock.h>
 #include <linux/printk.h>
@@ -146,6 +148,40 @@ bool pcache_pks_page(struct page *page)
 	return pfn >= pool_start_pfn && pfn < pool_end_pfn;
 }
 EXPORT_SYMBOL_GPL(pcache_pks_page);
+
+bool pcache_pks_mapping(const struct address_space *mapping)
+{
+	return static_branch_unlikely(&pcache_pks_enabled) &&
+	       mapping_pks_protected(mapping);
+}
+EXPORT_SYMBOL_GPL(pcache_pks_mapping);
+
+bool pcache_pks_file(const struct file *file)
+{
+	return file && S_ISREG(file_inode(file)->i_mode) &&
+	       pcache_pks_mapping(file->f_mapping);
+}
+EXPORT_SYMBOL_GPL(pcache_pks_file);
+
+int pcache_pks_reject_file(const struct file *file)
+{
+	if (unlikely(pcache_pks_file(file)))
+		return -EOPNOTSUPP;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pcache_pks_reject_file);
+
+int pcache_pks_validate_folio(const struct address_space *mapping,
+			      struct folio *folio)
+{
+	bool protected = mapping && mapping_pks_protected(mapping);
+	bool pool = folio && pcache_pks_page(&folio->page);
+
+	if (protected)
+		return pool && !folio_order(folio) ? 0 : -EPERM;
+	return pool ? -EPERM : 0;
+}
+EXPORT_SYMBOL_GPL(pcache_pks_validate_folio);
 
 struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order)
 {

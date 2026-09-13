@@ -237,7 +237,7 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 			continue;
 		}
 
-		folio = filemap_alloc_folio(gfp_mask, 0);
+		folio = filemap_alloc_folio_for_mapping(mapping, gfp_mask, 0);
 		if (!folio)
 			break;
 		if (filemap_add_folio(mapping, folio, index + i,
@@ -470,7 +470,8 @@ static inline int ra_alloc_folio(struct readahead_control *ractl, pgoff_t index,
 		pgoff_t mark, unsigned int order, gfp_t gfp)
 {
 	int err;
-	struct folio *folio = filemap_alloc_folio(gfp, order);
+	struct folio *folio = filemap_alloc_folio_for_mapping(ractl->mapping,
+							    gfp, order);
 
 	if (!folio)
 		return -ENOMEM;
@@ -778,13 +779,16 @@ void readahead_expand(struct readahead_control *ractl,
 	while (ractl->_index > new_index) {
 		unsigned long index = ractl->_index - 1;
 		struct page *page = xa_load(&mapping->i_pages, index);
+		struct folio *folio;
 
 		if (page && !xa_is_value(page))
 			return; /* Page apparently present */
 
-		page = __page_cache_alloc(gfp_mask);
-		if (!page)
+		folio = filemap_alloc_folio_for_mapping(mapping,
+								       gfp_mask, 0);
+		if (!folio)
 			return;
+		page = &folio->page;
 		if (add_to_page_cache_lru(page, mapping, index, gfp_mask) < 0) {
 			put_page(page);
 			return;
@@ -801,13 +805,16 @@ void readahead_expand(struct readahead_control *ractl,
 	while (ractl->_nr_pages < new_nr_pages) {
 		unsigned long index = ractl->_index + ractl->_nr_pages;
 		struct page *page = xa_load(&mapping->i_pages, index);
+		struct folio *folio;
 
 		if (page && !xa_is_value(page))
 			return; /* Page apparently present */
 
-		page = __page_cache_alloc(gfp_mask);
-		if (!page)
+		folio = filemap_alloc_folio_for_mapping(mapping,
+								       gfp_mask, 0);
+		if (!folio)
 			return;
+		page = &folio->page;
 		if (add_to_page_cache_lru(page, mapping, index, gfp_mask) < 0) {
 			put_page(page);
 			return;
