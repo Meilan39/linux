@@ -21,6 +21,7 @@
 #include <linux/delay.h>
 #include <linux/iversion.h>
 #include <linux/fileattr.h>
+#include <linux/pcache_pks.h>
 #include "ext4_jbd2.h"
 #include "ext4.h"
 #include <linux/fsmap.h>
@@ -1263,6 +1264,11 @@ group_extend_out:
 
 		if (!(donor.file->f_mode & FMODE_WRITE)) {
 			err = -EBADF;
+			goto mext_out;
+		}
+
+		if (pcache_pks_file(filp) || pcache_pks_file(donor.file)) {
+			err = -EOPNOTSUPP;
 			goto mext_out;
 		}
 
