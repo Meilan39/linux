@@ -423,7 +423,7 @@ void pks_setup(void)
 	cr4_set_bits(X86_CR4_PKS);
 }
 
-static void __pks_update_protection(u8 pkey, u8 protection)
+static u8 __pks_update_protection(u8 pkey, u8 protection)
 {
 	u32 pkrs;
 
@@ -433,10 +433,13 @@ static void __pks_update_protection(u8 pkey, u8 protection)
 	preempt_disable();
 	pks_write_pkrs(current->thread.pkrs);
 	preempt_enable();
+
+	return (pkrs >> PKR_PKEY_SHIFT(pkey)) & PKEY_ACCESS_MASK;
 }
 
 /*
- * Do not call this directly, see pks_set*().
+ * Simple users should prefer pks_set*(); callers that need to nest updates
+ * use the return value to restore the previous state.
  *
  * @pkey: Key for the domain to change
  * @protection: protection bits to be used
@@ -445,16 +448,18 @@ static void __pks_update_protection(u8 pkey, u8 protection)
  *     PKEY_DISABLE_ACCESS
  *     PKEY_DISABLE_WRITE
  *
+ * Return: the previous protection bits of @pkey, or PKEY_READ_WRITE if PKS
+ * is unavailable.
  */
-void pks_update_protection(u8 pkey, u8 protection)
+u8 pks_update_protection(u8 pkey, u8 protection)
 {
 	if (!cpu_feature_enabled(X86_FEATURE_PKS))
-		return;
+		return PKEY_READ_WRITE;
 
 	if (WARN_ON_ONCE(pkey >= PKS_KEY_MAX))
-		return;
+		return PKEY_READ_WRITE;
 
-	__pks_update_protection(pkey, protection);
+	return __pks_update_protection(pkey, protection);
 }
 EXPORT_SYMBOL_GPL(pks_update_protection);
 
