@@ -68,6 +68,15 @@ static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
 						   PKEY_READ_WRITE);
 }
 
+/* Like pcache_pks_scope_begin(), but revokes write access to the pool. */
+static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope)
+{
+	scope->active = static_branch_unlikely(&pcache_pks_enabled);
+	if (scope->active)
+		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE,
+						   PKEY_DISABLE_WRITE);
+}
+
 static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope)
 {
 	if (scope->active)
@@ -90,6 +99,7 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 }
 static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
 					  const struct address_space *mapping) {}
+static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope) {}
 static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
 
 #endif /* CONFIG_PCACHE_PKS */

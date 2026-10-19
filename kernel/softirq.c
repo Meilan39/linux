@@ -27,6 +27,7 @@
 #include <linux/tick.h>
 #include <linux/irq.h>
 #include <linux/wait_bit.h>
+#include <linux/pcache_pks.h>
 
 #include <asm/softirq_stack.h>
 
@@ -521,6 +522,7 @@ asmlinkage __visible void __softirq_entry __do_softirq(void)
 	bool in_hardirq;
 	__u32 pending;
 	int softirq_bit;
+	struct pcache_pks_scope pks_scope;
 
 	/*
 	 * Mask out PF_MEMALLOC as the current task context is borrowed for the
@@ -534,6 +536,14 @@ asmlinkage __visible void __softirq_entry __do_softirq(void)
 	softirq_handle_begin();
 	in_hardirq = lockdep_softirq_start();
 	account_softirq_enter(current);
+
+	/*
+	 * Interrupt entry already resets PKRS, so softirqs run on irq_exit()
+	 * never inherit a page-cache write scope. Softirqs run from
+	 * local_bh_enable() inside a task's open write scope would, so revoke
+	 * the grant until they finish.
+	 */
+	pcache_pks_scope_clamp(&pks_scope);
 
 restart:
 	/* Reset the pending bitmask before enabling irqs */
@@ -582,6 +592,7 @@ restart:
 		wakeup_softirqd();
 	}
 
+	pcache_pks_scope_end(&pks_scope);
 	account_softirq_exit(current);
 	lockdep_softirq_end(in_hardirq);
 	softirq_handle_end();
