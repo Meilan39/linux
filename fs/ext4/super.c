@@ -48,6 +48,7 @@
 #include <linux/fsnotify.h>
 #include <linux/fs_context.h>
 #include <linux/fs_parser.h>
+#include <linux/pcache_pks.h>
 
 #include "ext4.h"
 #include "ext4_extents.h"	/* Needed for trace points definition */
@@ -1709,6 +1710,7 @@ enum {
 	Opt_discard, Opt_nodiscard, Opt_init_itable, Opt_noinit_itable,
 	Opt_max_dir_size_kb, Opt_nojournal_checksum, Opt_nombcache,
 	Opt_no_prefetch_block_bitmaps, Opt_mb_optimize_scan,
+	Opt_pks_pagecache,
 	Opt_errors, Opt_data, Opt_data_err, Opt_jqfmt, Opt_dax_type,
 #ifdef CONFIG_EXT4_DEBUG
 	Opt_fc_debug_max_replay, Opt_fc_debug_force
@@ -1853,6 +1855,7 @@ static const struct fs_parameter_spec ext4_param_specs[] = {
 	fsparam_flag	("no_prefetch_block_bitmaps",
 						Opt_no_prefetch_block_bitmaps),
 	fsparam_s32	("mb_optimize_scan",	Opt_mb_optimize_scan),
+	fsparam_flag	("pks_pagecache",	Opt_pks_pagecache),
 	fsparam_string	("check",		Opt_removed),	/* mount option from ext2/3 */
 	fsparam_flag	("nocheck",		Opt_removed),	/* mount option from ext2/3 */
 	fsparam_flag	("reservation",		Opt_removed),	/* mount option from ext2/3 */
@@ -1954,6 +1957,8 @@ static const struct mount_opts {
 	{Opt_nombcache, EXT4_MOUNT_NO_MBCACHE, MOPT_SET},
 	{Opt_no_prefetch_block_bitmaps, EXT4_MOUNT_NO_PREFETCH_BLOCK_BITMAPS,
 	 MOPT_SET},
+	{Opt_pks_pagecache, EXT4_MOUNT2_PKS_PAGECACHE,
+	 MOPT_SET | MOPT_2 | MOPT_EXT4_ONLY | MOPT_SKIP},
 #ifdef CONFIG_EXT4_DEBUG
 	{Opt_fc_debug_force, EXT4_MOUNT2_JOURNAL_FAST_COMMIT,
 	 MOPT_SET | MOPT_2 | MOPT_EXT4_ONLY},
@@ -3091,6 +3096,8 @@ static int _ext4_show_options(struct seq_file *seq, struct super_block *sb,
 	} else if (test_opt2(sb, DAX_INODE)) {
 		SEQ_OPTS_PUTS("dax=inode");
 	}
+	if (test_opt2(sb, PKS_PAGECACHE))
+		SEQ_OPTS_PUTS("pks_pagecache");
 	ext4_show_quota_options(seq, sb);
 	return 0;
 }
@@ -4379,6 +4386,40 @@ err_out:
 	return NULL;
 }
 
+/*
+ * pks_pagecache relies on every store into a protected file's page cache
+ * happening inside a write scope, so refuse the features that write cached
+ * data from elsewhere: DAX, journalled data (which nodelalloc would let
+ * chattr +j enable per inode), inline data, encryption and verity.
+ */
+static int ext4_check_pks_pagecache(struct super_block *sb)
+{
+	const char *conflict = NULL;
+
+	if (!test_opt2(sb, PKS_PAGECACHE))
+		return 0;
+
+	if (!static_branch_unlikely(&pcache_pks_enabled))
+		conflict = "requires kernel PKS page-cache support";
+	else if (test_opt(sb, DAX_ALWAYS) || test_opt2(sb, DAX_INODE))
+		conflict = "cannot be used with DAX";
+	else if (test_opt(sb, DATA_FLAGS) == EXT4_MOUNT_JOURNAL_DATA)
+		conflict = "cannot be used with data=journal";
+	else if (!test_opt(sb, DELALLOC))
+		conflict = "cannot be used with nodelalloc";
+	else if (ext4_has_feature_inline_data(sb))
+		conflict = "cannot be used with inline_data";
+	else if (ext4_has_feature_encrypt(sb))
+		conflict = "cannot be used with encryption";
+	else if (ext4_has_feature_verity(sb))
+		conflict = "cannot be used with verity";
+
+	if (!conflict)
+		return 0;
+	ext4_msg(sb, KERN_ERR, "pks_pagecache %s", conflict);
+	return -EINVAL;
+}
+
 static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 {
 	struct buffer_head *bh, **group_desc;
@@ -4705,6 +4746,9 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 	} else {
 		sb->s_iflags |= SB_I_CGROUPWB;
 	}
+
+	if (ext4_check_pks_pagecache(sb))
+		goto failed_mount;
 
 	sb->s_flags = (sb->s_flags & ~SB_POSIXACL) |
 		(test_opt(sb, POSIX_ACL) ? SB_POSIXACL : 0);
@@ -6324,6 +6368,16 @@ static int __ext4_remount(struct fs_context *fc, struct super_block *sb)
 		err = -EINVAL;
 		goto restore_opts;
 	}
+
+	if ((sbi->s_mount_opt2 ^ old_opts.s_mount_opt2) & EXT4_MOUNT2_PKS_PAGECACHE) {
+		ext4_msg(sb, KERN_ERR, "can't change pks_pagecache during remount");
+		err = -EINVAL;
+		goto restore_opts;
+	}
+
+	err = ext4_check_pks_pagecache(sb);
+	if (err)
+		goto restore_opts;
 
 	if (ext4_test_mount_flag(sb, EXT4_MF_FS_ABORTED))
 		ext4_abort(sb, ESHUTDOWN, "Abort forced by user");
