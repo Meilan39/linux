@@ -20,6 +20,7 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
+#include <linux/pcache_pks.h>
 #include "internal.h"
 
 #include <linux/uaccess.h>
@@ -571,6 +572,7 @@ EXPORT_SYMBOL(kernel_write);
 ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
+	struct pcache_pks_scope pks_scope;
 
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
@@ -585,12 +587,14 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 	if (count > MAX_RW_COUNT)
 		count =  MAX_RW_COUNT;
 	file_start_write(file);
+	pcache_pks_scope_begin(&pks_scope, file->f_mapping);
 	if (file->f_op->write)
 		ret = file->f_op->write(file, buf, count, pos);
 	else if (file->f_op->write_iter)
 		ret = new_sync_write(file, buf, count, pos);
 	else
 		ret = -EINVAL;
+	pcache_pks_scope_end(&pks_scope);
 	if (ret > 0) {
 		fsnotify_modify(file);
 		add_wchar(current, ret);
@@ -918,11 +922,14 @@ static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
 	struct iovec *iov = iovstack;
 	struct iov_iter iter;
 	ssize_t ret;
+	struct pcache_pks_scope pks_scope;
 
 	ret = import_iovec(WRITE, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
 	if (ret >= 0) {
 		file_start_write(file);
+		pcache_pks_scope_begin(&pks_scope, file->f_mapping);
 		ret = do_iter_write(file, &iter, pos, flags);
+		pcache_pks_scope_end(&pks_scope);
 		file_end_write(file);
 		kfree(iov);
 	}

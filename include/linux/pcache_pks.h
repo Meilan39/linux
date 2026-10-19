@@ -8,6 +8,25 @@
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 
+/*
+ * A write scope grants the current thread write access to the PKS pool for
+ * the duration of an authorized page-cache store and then restores whatever
+ * access it had before, so scopes nest:
+ *
+ *	struct pcache_pks_scope pks_scope;
+ *
+ *	pcache_pks_scope_begin(&pks_scope, mapping);
+ *	...store into @mapping's page cache...
+ *	pcache_pks_scope_end(&pks_scope);
+ *
+ * The scope is only opened when @mapping is protected; for any other
+ * mapping, or a NULL one, both calls do nothing.
+ */
+struct pcache_pks_scope {
+	u8 old;
+	bool active;
+};
+
 #ifdef CONFIG_PCACHE_PKS
 
 DECLARE_STATIC_KEY_FALSE(pcache_pks_enabled);
@@ -36,6 +55,21 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 	       mapping && mapping_pks_protected(mapping);
 }
 
+static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
+					  const struct address_space *mapping)
+{
+	scope->active = pcache_pks_mapping(mapping);
+	if (scope->active)
+		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE,
+						   PKEY_READ_WRITE);
+}
+
+static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope)
+{
+	if (scope->active)
+		pks_update_protection(PKS_KEY_PAGE_CACHE, scope->old);
+}
+
 #else /* !CONFIG_PCACHE_PKS */
 
 static inline void pcache_pks_pool_reserve(void) {}
@@ -50,6 +84,9 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 {
 	return false;
 }
+static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
+					  const struct address_space *mapping) {}
+static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
 
 #endif /* CONFIG_PCACHE_PKS */
 
