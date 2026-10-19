@@ -10,6 +10,7 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/rmap.h>
 #include <linux/tracepoint-defs.h>
 
@@ -78,6 +79,16 @@ void unmap_page_range(struct mmu_gather *tlb,
 			     struct vm_area_struct *vma,
 			     unsigned long addr, unsigned long end,
 			     struct zap_details *details);
+
+/* Allocate a page-cache folio from the PKS pool if @mapping is protected. */
+static inline struct folio *
+filemap_alloc_folio_for_mapping(struct address_space *mapping, gfp_t gfp,
+				unsigned int order)
+{
+	if (pcache_pks_mapping(mapping))
+		return pcache_pks_alloc_folio(gfp, order);
+	return filemap_alloc_folio(gfp, order);
+}
 
 void page_cache_ra_order(struct readahead_control *, struct file_ra_state *,
 		unsigned int order);

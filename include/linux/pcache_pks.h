@@ -4,6 +4,7 @@
 
 #include <linux/jump_label.h>
 #include <linux/mm.h>
+#include <linux/pagemap.h>
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 
@@ -28,6 +29,13 @@ static inline bool pcache_pks_page(struct page *page)
 	return pfn >= pcache_pks_start_pfn && pfn < pcache_pks_end_pfn;
 }
 
+/* Does @mapping keep its page cache in the PKS pool? */
+static inline bool pcache_pks_mapping(const struct address_space *mapping)
+{
+	return static_branch_unlikely(&pcache_pks_enabled) &&
+	       mapping && mapping_pks_protected(mapping);
+}
+
 #else /* !CONFIG_PCACHE_PKS */
 
 static inline void pcache_pks_pool_reserve(void) {}
@@ -38,7 +46,21 @@ static inline struct folio *pcache_pks_alloc_folio(gfp_t gfp,
 }
 static inline void pcache_pks_recycle_page(struct page *page) {}
 static inline bool pcache_pks_page(struct page *page) { return false; }
+static inline bool pcache_pks_mapping(const struct address_space *mapping)
+{
+	return false;
+}
 
 #endif /* CONFIG_PCACHE_PKS */
+
+/*
+ * Protected mappings hold only pool folios, and pool folios belong only to
+ * protected mappings.
+ */
+static inline bool pcache_pks_folio_fits(const struct address_space *mapping,
+					 struct folio *folio)
+{
+	return pcache_pks_page(&folio->page) == pcache_pks_mapping(mapping);
+}
 
 #endif /* _LINUX_PCACHE_PKS_H */
