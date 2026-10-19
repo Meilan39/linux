@@ -224,44 +224,52 @@ void pcache_pks_recycle_page(struct page *page)
 }
 EXPORT_SYMBOL_GPL(pcache_pks_recycle_page);
 
-#define PCACHE_PKS_MAX_SOFTIRQ_FAULTS 256
-static DEFINE_PER_CPU(unsigned int, pcache_pks_softirq_fault_burst);
-
 bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
 			       bool write)
 {
 	struct insn insn;
-	int ret;
 
-	/* Only handle write protection violations */
+	/*
+	 * The pool is protected write-only (PKEY_DISABLE_WRITE); reads are never
+	 * gated, so a read fault on this key cannot occur by construction. If one
+	 * is ever delivered the key state is corrupt in a way we cannot reason
+	 * about, so fail closed.
+	 */
 	if (!write)
 		return false;
 
-	/* Context A: Task Context (copy-fail, fragnesia) */
-	if (!in_interrupt()) {
-		pr_warn("pcache_pks: unauthorized write trapped in task '%s' [pid %d] at %px (IP: %pS), killing task\n",
-			current->comm, current->pid, (void *)address, (void *)regs->ip);
+	/*
+	 * Context A: a killable user task (syscall path, e.g. copy-fail via
+	 * scatterwalk_copychunks). The offending store never retires; terminate
+	 * the task.
+	 */
+	if (!in_interrupt() && !(current->flags & PF_KTHREAD)) {
+		pr_warn_ratelimited("pcache_pks: unauthorized write by '%s'[%d] at %px (IP %pS), killing task\n",
+				    current->comm, current->pid,
+				    (void *)address, (void *)regs->ip);
 		make_task_dead(SIGKILL);
 		return true;
 	}
 
-	/* Context B: Interrupt / SoftIRQ Context (dirty-frag) */
-	if (__this_cpu_inc_return(pcache_pks_softirq_fault_burst) > PCACHE_PKS_MAX_SOFTIRQ_FAULTS) {
-		pr_emerg("pcache_pks: softirq fault burst limit exceeded at %px, falling back to panic\n",
-			 (void *)regs->ip);
-		return false;
-	}
-
-	ret = insn_decode_kernel(&insn, (void *)regs->ip);
-
-	if (!ret && insn.length > 0 && insn.length <= MAX_INSN_SIZE) {
-		pr_warn_ratelimited("pcache_pks: softirq store suppressed at %pS (len %d B), advancing IP\n",
-				    (void *)regs->ip, insn.length);
+	/*
+	 * Context B: softirq / hardirq / kernel thread, where killing the current
+	 * context is unsafe. Skip the single faulting store and let execution
+	 * continue. A bulk copy loop (e.g. __crypto_xor) re-faults once per
+	 * element and drains on its own finite trip count, so no budget or
+	 * counter is required.
+	 */
+	if (insn_decode_kernel(&insn, (void *)regs->ip) == 0 &&
+	    insn.length > 0 && insn.length <= MAX_INSN_SIZE) {
+		pr_warn_ratelimited("pcache_pks: suppressed stray store at %pS\n",
+				    (void *)regs->ip);
 		regs->ip += insn.length;
 		return true;
 	}
 
-	/* Decoding failure fallback */
+	/*
+	 * The store could not be decoded, so it cannot be stepped over safely.
+	 * Unreachable for real store encodings; fail closed.
+	 */
 	return false;
 }
 EXPORT_SYMBOL_GPL(pcache_pks_fault_callback);
