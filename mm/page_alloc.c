@@ -67,6 +67,7 @@
 #include <linux/page_table_check.h>
 #include <linux/kthread.h>
 #include <linux/memcontrol.h>
+#include <linux/pcache_pks.h>
 #include <linux/ftrace.h>
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
@@ -3423,6 +3424,11 @@ void free_unref_page(struct page *page, unsigned int order)
 	if (!free_unref_page_prepare(page, pfn, order))
 		return;
 
+	if (unlikely(pcache_pks_page(page))) {
+		pcache_pks_recycle_page(page);
+		return;
+	}
+
 	/*
 	 * We only track unmovable, reclaimable and movable on pcp lists.
 	 * Place ISOLATE pages on the isolated list because they are being
@@ -3459,6 +3465,12 @@ void free_unref_page_list(struct list_head *list)
 		unsigned long pfn = page_to_pfn(page);
 		if (!free_unref_page_prepare(page, pfn, 0)) {
 			list_del(&page->lru);
+			continue;
+		}
+
+		if (unlikely(pcache_pks_page(page))) {
+			list_del(&page->lru);
+			pcache_pks_recycle_page(page);
 			continue;
 		}
 
