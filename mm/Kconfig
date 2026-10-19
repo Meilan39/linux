@@ -812,6 +812,16 @@ config PCACHE_PKS
 
 	  The pool is only reserved when booting with pcache_pks=on.
 
+config PCACHE_PKS_DEBUG
+	bool "PKS page-cache protection debugging"
+	depends on PCACHE_PKS && DEBUG_FS
+	help
+	  Count the write scopes opened on protected mappings and report
+	  the count, with the pool's page-frame range, in
+	  /sys/kernel/debug/pcache_pks/status.
+
+	  Leave disabled for performance measurements.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN

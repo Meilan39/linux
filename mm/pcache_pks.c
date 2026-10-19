@@ -9,12 +9,14 @@
  * outside a write scope fault and are neutralized by
  * pcache_pks_fault_callback().
  */
+#include <linux/debugfs.h>
 #include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/pcache_pks.h>
 #include <linux/printk.h>
 #include <linux/ratelimit.h>
 #include <linux/sched/task.h>
+#include <linux/seq_file.h>
 #include <linux/spinlock.h>
 #include <asm/insn.h>
 #include <asm/set_memory.h>
@@ -33,6 +35,30 @@ static DEFINE_SPINLOCK(pool_lock);
 static LIST_HEAD(pool_free);
 
 static bool pcache_pks_param __initdata;
+
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+atomic64_t pcache_pks_scope_count = ATOMIC64_INIT(0);
+EXPORT_SYMBOL_GPL(pcache_pks_scope_count);
+
+static int pcache_pks_status_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "pool_start_pfn: 0x%lx\n", pcache_pks_start_pfn);
+	seq_printf(m, "pool_end_pfn:   0x%lx\n", pcache_pks_end_pfn);
+	seq_printf(m, "scope_count:    %lld\n",
+		   (long long)atomic64_read(&pcache_pks_scope_count));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(pcache_pks_status);
+
+static int __init pcache_pks_debugfs_init(void)
+{
+	struct dentry *dir = debugfs_create_dir("pcache_pks", NULL);
+
+	debugfs_create_file("status", 0444, dir, NULL, &pcache_pks_status_fops);
+	return 0;
+}
+late_initcall(pcache_pks_debugfs_init);
+#endif /* CONFIG_PCACHE_PKS_DEBUG */
 
 static int __init setup_pcache_pks(char *str)
 {

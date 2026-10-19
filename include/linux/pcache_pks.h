@@ -59,13 +59,25 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 	       mapping && mapping_pks_protected(mapping);
 }
 
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+extern atomic64_t pcache_pks_scope_count;
+static inline void pcache_pks_count_scope(void)
+{
+	atomic64_inc(&pcache_pks_scope_count);
+}
+#else
+static inline void pcache_pks_count_scope(void) {}
+#endif
+
 static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
 					  const struct address_space *mapping)
 {
 	scope->active = pcache_pks_mapping(mapping);
-	if (scope->active)
+	if (scope->active) {
+		pcache_pks_count_scope();
 		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE,
 						   PKEY_READ_WRITE);
+	}
 }
 
 /* Like pcache_pks_scope_begin(), but revokes write access to the pool. */
