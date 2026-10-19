@@ -520,6 +520,8 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	struct iov_iter iter;
 	ssize_t ret;
 
+	if (pcache_pks_file(file))
+		return -EOPNOTSUPP;
 	if (WARN_ON_ONCE(!(file->f_mode & FMODE_WRITE)))
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_WRITE))
@@ -867,6 +869,8 @@ ssize_t vfs_iocb_iter_write(struct file *file, struct kiocb *iocb,
 	size_t tot_len;
 	ssize_t ret = 0;
 
+	if (pcache_pks_file(file))
+		return -EOPNOTSUPP;
 	if (!file->f_op->write_iter)
 		return -EINVAL;
 	if (!(file->f_mode & FMODE_WRITE))
@@ -892,6 +896,8 @@ EXPORT_SYMBOL(vfs_iocb_iter_write);
 ssize_t vfs_iter_write(struct file *file, struct iov_iter *iter, loff_t *ppos,
 		rwf_t flags)
 {
+	if (pcache_pks_file(file))
+		return -EOPNOTSUPP;
 	if (!file->f_op->write_iter)
 		return -EINVAL;
 	return do_iter_write(file, iter, ppos, flags);
@@ -1474,6 +1480,8 @@ ssize_t vfs_copy_file_range(struct file *file_in, loff_t pos_in,
 {
 	ssize_t ret;
 
+	if (pcache_pks_file(file_out))
+		return -EOPNOTSUPP;
 	if (flags != 0)
 		return -EINVAL;
 

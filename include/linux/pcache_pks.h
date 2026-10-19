@@ -104,6 +104,11 @@ static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
 
 #endif /* CONFIG_PCACHE_PKS */
 
+static inline bool pcache_pks_file(const struct file *file)
+{
+	return pcache_pks_mapping(file->f_mapping);
+}
+
 /*
  * Protected mappings hold only pool folios, and pool folios belong only to
  * protected mappings.
