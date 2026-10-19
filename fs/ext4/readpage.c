@@ -43,6 +43,7 @@
 #include <linux/writeback.h>
 #include <linux/backing-dev.h>
 #include <linux/pagevec.h>
+#include <linux/pcache_pks.h>
 
 #include "ext4.h"
 
@@ -240,12 +241,15 @@ int ext4_mpage_readpages(struct inode *inode,
 	unsigned relative_block = 0;
 	struct ext4_map_blocks map;
 	unsigned int nr_pages = rac ? readahead_count(rac) : 1;
+	struct pcache_pks_scope pks_scope;
 
 	map.m_pblk = 0;
 	map.m_lblk = 0;
 	map.m_len = 0;
 	map.m_flags = 0;
 
+	/* Zeroing holes, here and in block_read_full_page(), stores into pages. */
+	pcache_pks_scope_begin(&pks_scope, inode->i_mapping);
 	for (; nr_pages; nr_pages--) {
 		int fully_mapped = 1;
 		unsigned first_hole = blocks_per_page;
@@ -401,6 +405,7 @@ int ext4_mpage_readpages(struct inode *inode,
 		if (rac)
 			put_page(page);
 	}
+	pcache_pks_scope_end(&pks_scope);
 	if (bio)
 		submit_bio(bio);
 	return 0;
