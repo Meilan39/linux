@@ -802,6 +802,7 @@ config PCACHE_PKS
 	depends on X86_64 && ARCH_HAS_SUPERVISOR_PKEYS
 	depends on !HIBERNATION
 	select ARCH_ENABLE_PKS_CONSUMER
+	select INSTRUCTION_DECODER
 	help
 	  Reserve a pool of memory, write-protected with a Supervisor
 	  Protection Key, from which the page cache of selected ext4 files

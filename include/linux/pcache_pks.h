@@ -8,6 +8,8 @@
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 
+struct pt_regs;
+
 /*
  * A write scope grants the current thread write access to the PKS pool for
  * the duration of an authorized page-cache store and then restores whatever
@@ -36,6 +38,8 @@ extern unsigned long pcache_pks_end_pfn;
 void pcache_pks_pool_reserve(void);
 struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order);
 void pcache_pks_recycle_page(struct page *page);
+bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
+			       bool write);
 
 /* Is @page part of the PKS page-cache pool? */
 static inline bool pcache_pks_page(struct page *page)

@@ -5,13 +5,18 @@
  * A PMD-aligned range of memory is reserved at boot, tagged with
  * PKS_KEY_PAGE_CACHE (write-disabled by default) and handed out one order-0
  * page at a time to the page cache of protected mappings. Freed pool pages
- * return here rather than to the buddy allocator.
+ * return here rather than to the buddy allocator. Stores into the pool from
+ * outside a write scope fault and are neutralized by
+ * pcache_pks_fault_callback().
  */
 #include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/pcache_pks.h>
 #include <linux/printk.h>
+#include <linux/ratelimit.h>
+#include <linux/sched/task.h>
 #include <linux/spinlock.h>
+#include <asm/insn.h>
 #include <asm/set_memory.h>
 #include "internal.h"
 
@@ -139,4 +144,53 @@ void pcache_pks_recycle_page(struct page *page)
 	spin_lock_irqsave(&pool_lock, flags);
 	list_add(&page->lru, &pool_free);
 	spin_unlock_irqrestore(&pool_lock, flags);
+}
+
+bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
+			       bool write)
+{
+	struct insn insn;
+
+	/*
+	 * The pool is protected write-only (PKEY_DISABLE_WRITE); reads are never
+	 * gated, so a read fault on this key cannot occur by construction. If one
+	 * is ever delivered the key state is corrupt in a way we cannot reason
+	 * about, so fail closed.
+	 */
+	if (!write)
+		return false;
+
+	/*
+	 * Context A: a killable user task (syscall path, e.g. copy-fail via
+	 * scatterwalk_copychunks). The offending store never retires; terminate
+	 * the task.
+	 */
+	if (!in_interrupt() && !(current->flags & PF_KTHREAD)) {
+		pr_warn_ratelimited("pcache_pks: unauthorized write by '%s'[%d] at %px (IP %pS), killing task\n",
+				    current->comm, current->pid,
+				    (void *)address, (void *)regs->ip);
+		make_task_dead(SIGKILL);
+		return true;
+	}
+
+	/*
+	 * Context B: softirq / hardirq / kernel thread, where killing the current
+	 * context is unsafe. Skip the single faulting store and let execution
+	 * continue. A bulk copy loop (e.g. __crypto_xor) re-faults once per
+	 * element and drains on its own finite trip count, so no budget or
+	 * counter is required.
+	 */
+	if (insn_decode_kernel(&insn, (void *)regs->ip) == 0 &&
+	    insn.length > 0 && insn.length <= MAX_INSN_SIZE) {
+		pr_warn_ratelimited("pcache_pks: suppressed stray store at %pS\n",
+				    (void *)regs->ip);
+		regs->ip += insn.length;
+		return true;
+	}
+
+	/*
+	 * The store could not be decoded, so it cannot be stepped over safely.
+	 * Unreachable for real store encodings; fail closed.
+	 */
+	return false;
 }

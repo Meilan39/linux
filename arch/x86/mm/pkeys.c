@@ -9,6 +9,7 @@
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 #include <linux/memremap.h>		  /* fault callback               */
+#include <linux/pcache_pks.h>		  /* fault callback               */
 #include <uapi/asm-generic/mman-common.h>
 
 #include <asm/cpufeature.h>             /* boot_cpu_has, ...            */
@@ -252,6 +253,9 @@ static const pks_key_callback pks_key_callbacks[PKS_KEY_MAX] = {
 #endif
 #ifdef CONFIG_PKS_TEST
 	[PKS_KEY_TEST]		= pks_test_fault_callback,
+#endif
+#ifdef CONFIG_PCACHE_PKS
+	[PKS_KEY_PAGE_CACHE]	= pcache_pks_fault_callback,
 #endif
 };
 
