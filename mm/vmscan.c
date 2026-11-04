@@ -3500,9 +3500,13 @@ static unsigned long do_try_to_free_pages(struct zonelist *zonelist,
 					  struct scan_control *sc)
 {
 	int initial_priority = sc->priority;
+	struct pcache_pks_scope pks_scope;
+	unsigned long ret = 0;
 	pg_data_t *last_pgdat;
 	struct zoneref *z;
 	struct zone *zone;
+
+	pcache_pks_scope_clamp(&pks_scope);
 retry:
 	delayacct_freepages_start();
 
@@ -3549,12 +3553,16 @@ retry:
 
 	delayacct_freepages_end();
 
-	if (sc->nr_reclaimed)
-		return sc->nr_reclaimed;
+	if (sc->nr_reclaimed) {
+		ret = sc->nr_reclaimed;
+		goto out;
+	}
 
 	/* Aborted reclaim to try compaction? don't OOM, then */
-	if (sc->compaction_ready)
-		return 1;
+	if (sc->compaction_ready) {
+		ret = 1;
+		goto out;
+	}
 
 	/*
 	 * We make inactive:active ratio decisions based on the node's
@@ -3581,7 +3589,9 @@ retry:
 		goto retry;
 	}
 
-	return 0;
+out:
+	pcache_pks_scope_end(&pks_scope);
+	return ret;
 }
 
 static bool allow_direct_reclaim(pg_data_t *pgdat)
