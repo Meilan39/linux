@@ -797,6 +797,20 @@ config ZONE_DEVICE
 
 	  If FS_DAX is enabled, then say Y.
 
+config PCACHE_PKS
+	bool "PKS page-cache protection (EXPERIMENTAL)"
+	depends on X86_64 && ARCH_HAS_SUPERVISOR_PKEYS
+	depends on !HIBERNATION
+	select ARCH_ENABLE_PKS_CONSUMER
+	help
+	  Reserve a PMD-aligned pool of physical memory, write-protected
+	  with a Supervisor Protection Key, from which the page cache of
+	  selected ext4 mappings is allocated. Kernel stores into those
+	  pages fault unless executed inside an authorized write scope.
+
+	  The pool is only reserved when booting with pcache_pks=on, and
+	  its size in MiB may be overridden via pcache_pks_mb=<N>.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN
