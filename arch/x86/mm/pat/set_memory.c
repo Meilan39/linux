@@ -1983,6 +1983,13 @@ int set_memory_global(unsigned long addr, int numpages)
 				    __pgprot(_PAGE_GLOBAL), 0);
 }
 
+int set_memory_pkey(unsigned long addr, int numpages, int pkey)
+{
+	return change_page_attr_set_clr(&addr, numpages,
+					__pgprot(_PAGE_PKEY(pkey)),
+					__pgprot(_PAGE_PKEY_MASK), 0, 0, NULL);
+}
+
 /*
  * __set_memory_enc_pgtable() is used for the hypervisors that get
  * informed about "encryption" status via page tables.
