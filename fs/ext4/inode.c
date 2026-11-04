@@ -24,6 +24,7 @@
 #include <linux/time.h>
 #include <linux/highuid.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/dax.h>
 #include <linux/quotaops.h>
 #include <linux/string.h>
@@ -3669,6 +3670,16 @@ static const struct address_space_operations ext4_dax_aops = {
 	.swap_activate		= ext4_iomap_swap_activate,
 };
 
+/* Regular, user-visible data files on a pks_pagecache mount. */
+static bool ext4_should_pks_protect(struct inode *inode)
+{
+	return test_opt2(inode->i_sb, PKS_PAGECACHE) &&
+	       S_ISREG(inode->i_mode) &&
+	       inode->i_ino >= EXT4_FIRST_INO(inode->i_sb) &&
+	       !ext4_is_quota_file(inode) &&
+	       !ext4_test_inode_flag(inode, EXT4_INODE_EA_INODE);
+}
+
 void ext4_set_aops(struct inode *inode)
 {
 	switch (ext4_inode_journal_mode(inode)) {
@@ -3687,6 +3698,9 @@ void ext4_set_aops(struct inode *inode)
 		inode->i_mapping->a_ops = &ext4_da_aops;
 	else
 		inode->i_mapping->a_ops = &ext4_aops;
+
+	if (ext4_should_pks_protect(inode))
+		mapping_set_pks_protected(inode->i_mapping);
 }
 
 static int __ext4_block_zero_page_range(handle_t *handle,
@@ -6042,6 +6056,7 @@ vm_fault_t ext4_page_mkwrite(struct vm_fault *vmf)
 	struct file *file = vma->vm_file;
 	struct inode *inode = file_inode(file);
 	struct address_space *mapping = inode->i_mapping;
+	struct pcache_pks_scope pks_scope;
 	handle_t *handle;
 	get_block_t *get_block;
 	int retries = 0;
@@ -6053,6 +6068,7 @@ vm_fault_t ext4_page_mkwrite(struct vm_fault *vmf)
 	file_update_time(vma->vm_file);
 
 	filemap_invalidate_lock_shared(mapping);
+	pcache_pks_scope_begin(&pks_scope, mapping);
 
 	err = ext4_convert_inline_data(inode);
 	if (err)
@@ -6167,6 +6183,7 @@ retry_alloc:
 out_ret:
 	ret = block_page_mkwrite_return(err);
 out:
+	pcache_pks_scope_end(&pks_scope);
 	filemap_invalidate_unlock_shared(mapping);
 	sb_end_pagefault(inode->i_sb);
 	return ret;

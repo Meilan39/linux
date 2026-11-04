@@ -30,6 +30,7 @@
 #include <linux/uio.h>
 #include <linux/mman.h>
 #include <linux/backing-dev.h>
+#include <linux/pcache_pks.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "xattr.h"
@@ -673,7 +674,12 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (IS_DAX(inode))
 		return ext4_dax_write_iter(iocb, from);
 #endif
-	if (iocb->ki_flags & IOCB_DIRECT)
+	/*
+	 * A direct write would reach the disk around resident protected folios,
+	 * so it takes the buffered path, as on an inode that cannot do direct
+	 * I/O, and is scoped in generic_perform_write().
+	 */
+	if ((iocb->ki_flags & IOCB_DIRECT) && !pcache_pks_file(iocb->ki_filp))
 		return ext4_dio_write_iter(iocb, from);
 	else
 		return ext4_buffered_write_iter(iocb, from);

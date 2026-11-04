@@ -54,6 +54,7 @@
 #include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/file.h>
 #include <linux/stat.h>
 #include <linux/errno.h>
@@ -187,7 +188,8 @@ static void __loop_update_dio(struct loop_device *lo, bool dio)
 	if (dio) {
 		if (queue_logical_block_size(lo->lo_queue) >= sb_bsize &&
 				!(lo->lo_offset & dio_align) &&
-				mapping->a_ops->direct_IO)
+				mapping->a_ops->direct_IO &&
+				!pcache_pks_file(file))
 			use_dio = true;
 		else
 			use_dio = false;
@@ -273,19 +275,48 @@ static int lo_write_simple(struct loop_device *lo, struct request *rq,
 	return ret;
 }
 
+/*
+ * Grant a PKS write scope to a loop read request only when every PKS pool page
+ * in the request is a locked, non-uptodate page undergoing a cold page-cache
+ * fill from disk.
+ */
+static bool lo_rq_needs_pks_read_scope(struct request *rq)
+{
+	struct req_iterator iter;
+	struct bio_vec bvec;
+	bool has_pks = false;
+
+	if (!pcache_pks_is_enabled())
+		return false;
+
+	rq_for_each_segment(bvec, rq, iter) {
+		if (!pcache_pks_page(bvec.bv_page))
+			continue;
+		if (!PageLocked(bvec.bv_page) || PageUptodate(bvec.bv_page))
+			return false;
+		has_pks = true;
+	}
+	return has_pks;
+}
+
 static int lo_read_simple(struct loop_device *lo, struct request *rq,
 		loff_t pos)
 {
+	struct pcache_pks_scope pks_scope;
 	struct bio_vec bvec;
 	struct req_iterator iter;
 	struct iov_iter i;
 	ssize_t len;
+	int ret = 0;
 
+	pcache_pks_scope_begin_raw(&pks_scope, lo_rq_needs_pks_read_scope(rq));
 	rq_for_each_segment(bvec, rq, iter) {
 		iov_iter_bvec(&i, READ, &bvec, 1, bvec.bv_len);
 		len = vfs_iter_read(lo->lo_backing_file, &i, &pos, 0);
-		if (len < 0)
-			return len;
+		if (len < 0) {
+			ret = len;
+			break;
+		}
 
 		flush_dcache_page(bvec.bv_page);
 
@@ -298,8 +329,9 @@ static int lo_read_simple(struct loop_device *lo, struct request *rq,
 		}
 		cond_resched();
 	}
+	pcache_pks_scope_end(&pks_scope);
 
-	return 0;
+	return ret;
 }
 
 static int lo_fallocate(struct loop_device *lo, struct request *rq, loff_t pos,
@@ -310,6 +342,7 @@ static int lo_fallocate(struct loop_device *lo, struct request *rq, loff_t pos,
 	 * a.k.a. discard/zerorange.
 	 */
 	struct file *file = lo->lo_backing_file;
+	struct pcache_pks_scope pks_scope;
 	int ret;
 
 	mode |= FALLOC_FL_KEEP_SIZE;
@@ -319,7 +352,9 @@ static int lo_fallocate(struct loop_device *lo, struct request *rq, loff_t pos,
 		goto out;
 	}
 
+	pcache_pks_scope_begin(&pks_scope, file->f_mapping);
 	ret = file->f_op->fallocate(file, mode, pos, blk_rq_bytes(rq));
+	pcache_pks_scope_end(&pks_scope);
 	if (unlikely(ret && ret != -EINVAL && ret != -EOPNOTSUPP))
 		ret = -EIO;
  out:
@@ -357,12 +392,16 @@ static void lo_complete_rq(struct request *rq)
 		blk_mq_requeue_request(rq, true);
 	} else {
 		if (cmd->use_aio) {
+			struct pcache_pks_scope pks_scope;
 			struct bio *bio = rq->bio;
 
+			pcache_pks_scope_begin_raw(&pks_scope,
+				lo_rq_needs_pks_read_scope(rq));
 			while (bio) {
 				zero_fill_bio(bio);
 				bio = bio->bi_next;
 			}
+			pcache_pks_scope_end(&pks_scope);
 		}
 		ret = BLK_STS_IOERR;
 end_io:
@@ -447,10 +486,16 @@ static int lo_rw_aio(struct loop_device *lo, struct loop_cmd *cmd,
 	cmd->iocb.ki_flags = IOCB_DIRECT;
 	cmd->iocb.ki_ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, 0);
 
-	if (rw == WRITE)
+	if (rw == WRITE) {
 		ret = call_write_iter(file, &cmd->iocb, &iter);
-	else
+	} else {
+		struct pcache_pks_scope pks_scope;
+
+		pcache_pks_scope_begin_raw(&pks_scope,
+					   lo_rq_needs_pks_read_scope(rq));
 		ret = call_read_iter(file, &cmd->iocb, &iter);
+		pcache_pks_scope_end(&pks_scope);
+	}
 
 	lo_rw_aio_do_completion(cmd);
 
