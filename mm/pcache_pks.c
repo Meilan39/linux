@@ -10,6 +10,7 @@
  * writeback when dirty pool pages dominate.
  */
 #include <linux/atomic.h>
+#include <linux/debugfs.h>
 #include <linux/export.h>
 #include <linux/gfp.h>
 #include <linux/jiffies.h>
@@ -23,6 +24,7 @@
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
+#include <linux/seq_file.h>
 #include <linux/sizes.h>
 #include <linux/spinlock.h>
 #include <linux/swap.h>
@@ -56,6 +58,52 @@ static atomic_long_t reclaim_cursor = ATOMIC_LONG_INIT(0);
 
 static bool pcache_pks_param __initdata;
 static unsigned long pcache_pks_mb_param __initdata;
+
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+atomic64_t pcache_pks_scope_count = ATOMIC64_INIT(0);
+EXPORT_SYMBOL_GPL(pcache_pks_scope_count);
+static atomic64_t pcache_pks_reclaim_count = ATOMIC64_INIT(0);
+static atomic64_t pcache_pks_suppressed_fault_count = ATOMIC64_INIT(0);
+
+static inline void pcache_pks_add_reclaimed(unsigned long nr)
+{
+	if (nr)
+		atomic64_add(nr, &pcache_pks_reclaim_count);
+}
+
+static inline void pcache_pks_count_suppressed_fault(void)
+{
+	atomic64_inc(&pcache_pks_suppressed_fault_count);
+}
+
+static int pcache_pks_status_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "pool_start_pfn:    0x%lx\n", pcache_pks_start_pfn);
+	seq_printf(m, "pool_end_pfn:      0x%lx\n", pcache_pks_end_pfn);
+	seq_printf(m, "scope_count:       %lld\n",
+		   (long long)atomic64_read(&pcache_pks_scope_count));
+	seq_printf(m, "pool_free_pages:   %ld\n",
+		   atomic_long_read(&pool_free_count));
+	seq_printf(m, "reclaim_pages:     %lld\n",
+		   (long long)atomic64_read(&pcache_pks_reclaim_count));
+	seq_printf(m, "suppressed_faults: %lld\n",
+		   (long long)atomic64_read(&pcache_pks_suppressed_fault_count));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(pcache_pks_status);
+
+static int __init pcache_pks_debugfs_init(void)
+{
+	struct dentry *dir = debugfs_create_dir("pcache_pks", NULL);
+
+	debugfs_create_file("status", 0444, dir, NULL, &pcache_pks_status_fops);
+	return 0;
+}
+late_initcall(pcache_pks_debugfs_init);
+#else /* !CONFIG_PCACHE_PKS_DEBUG */
+static inline void pcache_pks_add_reclaimed(unsigned long nr) {}
+static inline void pcache_pks_count_suppressed_fault(void) {}
+#endif /* CONFIG_PCACHE_PKS_DEBUG */
 
 static int __init setup_pcache_pks(char *str)
 {
@@ -262,6 +310,7 @@ unlock_put:
 	}
 
 	atomic_long_set(&reclaim_cursor, (start + i) % nr_pages);
+	pcache_pks_add_reclaimed(reclaimed);
 	return reclaimed;
 }
 
@@ -407,6 +456,7 @@ bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
 	 */
 	if (insn_decode_kernel(&insn, (void *)regs->ip) == 0 &&
 	    insn.length > 0 && insn.length <= MAX_INSN_SIZE) {
+		pcache_pks_count_suppressed_fault();
 		pr_warn_ratelimited("pcache_pks: suppressed stray store at %pS\n",
 				    (void *)regs->ip);
 		regs->ip += insn.length;
