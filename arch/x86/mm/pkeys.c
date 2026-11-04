@@ -377,6 +377,7 @@ void pks_save_pt_regs(struct pt_regs *regs)
 
 	aux_pt_regs = &to_extended_pt_regs(regs)->aux;
 	aux_pt_regs->pkrs = current->thread.pkrs;
+	current->thread.pkrs = PKS_INIT_VALUE;
 	pks_write_pkrs(PKS_INIT_VALUE);
 }
 
