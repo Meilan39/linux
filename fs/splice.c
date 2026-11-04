@@ -22,6 +22,7 @@
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/splice.h>
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
@@ -48,6 +49,10 @@ static bool page_cache_pipe_buf_try_steal(struct pipe_inode_info *pipe,
 {
 	struct folio *folio = page_folio(buf->page);
 	struct address_space *mapping;
+
+	/* Pool folios belong exclusively to protected mappings. */
+	if (pcache_pks_page(&folio->page))
+		return false;
 
 	folio_lock(folio);
 

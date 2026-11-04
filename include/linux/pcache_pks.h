@@ -18,12 +18,18 @@ void pcache_pks_pool_reserve(void);
 struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order);
 void pcache_pks_recycle_page(struct page *page);
 
+/* Is the PKS page-cache pool active? */
+static inline bool pcache_pks_is_enabled(void)
+{
+	return static_branch_unlikely(&pcache_pks_enabled);
+}
+
 /* Is @page part of the PKS page-cache pool? */
 static inline bool pcache_pks_page(struct page *page)
 {
 	unsigned long pfn;
 
-	if (!static_branch_unlikely(&pcache_pks_enabled))
+	if (!pcache_pks_is_enabled())
 		return false;
 	pfn = page_to_pfn(page);
 	return pfn >= pcache_pks_start_pfn && pfn < pcache_pks_end_pfn;
@@ -32,7 +38,7 @@ static inline bool pcache_pks_page(struct page *page)
 /* Does @mapping keep its page cache in the PKS pool? */
 static inline bool pcache_pks_mapping(const struct address_space *mapping)
 {
-	return static_branch_unlikely(&pcache_pks_enabled) &&
+	return pcache_pks_is_enabled() &&
 	       mapping && mapping_pks_protected(mapping);
 }
 
@@ -45,6 +51,10 @@ static inline struct folio *pcache_pks_alloc_folio(gfp_t gfp,
 	return NULL;
 }
 static inline void pcache_pks_recycle_page(struct page *page) {}
+static inline bool pcache_pks_is_enabled(void)
+{
+	return false;
+}
 static inline bool pcache_pks_page(struct page *page)
 {
 	return false;

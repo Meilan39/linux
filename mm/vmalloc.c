@@ -582,6 +582,17 @@ int vmap_pages_range_noflush(unsigned long addr, unsigned long end,
 
 	WARN_ON(page_shift < PAGE_SHIFT);
 
+	/*
+	 * Reject untagged vmap/vm_map_ram aliases of PKS pool pages so every
+	 * kernel virtual alias of a pool page carries PKS_KEY_PAGE_CACHE.
+	 */
+	if (pcache_pks_is_enabled()) {
+		for (i = 0; i < nr; i++) {
+			if (unlikely(pcache_pks_page(pages[i])))
+				return -EPERM;
+		}
+	}
+
 	if (!IS_ENABLED(CONFIG_HAVE_ARCH_HUGE_VMALLOC) ||
 			page_shift == PAGE_SHIFT)
 		return vmap_small_pages_range_noflush(addr, end, prot, pages);

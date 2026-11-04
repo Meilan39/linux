@@ -20,6 +20,7 @@
 #include <linux/uio.h>
 #include <linux/highmem.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/audit.h>
 #include <linux/syscalls.h>
 #include <linux/fcntl.h>
@@ -166,6 +167,9 @@ bool generic_pipe_buf_try_steal(struct pipe_inode_info *pipe,
 		struct pipe_buffer *buf)
 {
 	struct page *page = buf->page;
+
+	if (pcache_pks_page(page))
+		return false;
 
 	/*
 	 * A reference of one is golden, that means that the owner of this
