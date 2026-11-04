@@ -8,6 +8,8 @@
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 
+struct pt_regs;
+
 struct pcache_pks_scope {
 	u8 old;
 	bool active;
@@ -22,6 +24,8 @@ extern unsigned long pcache_pks_end_pfn;
 void pcache_pks_pool_reserve(void);
 struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order);
 void pcache_pks_recycle_page(struct page *page);
+bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
+			       bool write);
 
 /* Is the PKS page-cache pool active? */
 static inline bool pcache_pks_is_enabled(void)
