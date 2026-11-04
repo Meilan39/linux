@@ -266,11 +266,13 @@ unlock_put:
 
 static bool pcache_pks_reclaim_pages(gfp_t gfp)
 {
+	struct pcache_pks_scope pks_scope;
 	unsigned int noreclaim_flag;
 	unsigned long reclaimed;
 	bool dirty_or_wb = false;
 	int tries;
 
+	pcache_pks_scope_clamp(&pks_scope);
 	noreclaim_flag = memalloc_noreclaim_save();
 
 	lru_add_drain();
@@ -314,6 +316,7 @@ static bool pcache_pks_reclaim_pages(gfp_t gfp)
 
 out:
 	memalloc_noreclaim_restore(noreclaim_flag);
+	pcache_pks_scope_end(&pks_scope);
 	return reclaimed > 0 || atomic_long_read(&pool_free_count) > 0;
 }
 

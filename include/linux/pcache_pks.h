@@ -8,6 +8,11 @@
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 
+struct pcache_pks_scope {
+	u8 old;
+	bool active;
+};
+
 #ifdef CONFIG_PCACHE_PKS
 
 DECLARE_STATIC_KEY_FALSE(pcache_pks_enabled);
@@ -42,6 +47,48 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 	       mapping && mapping_pks_protected(mapping);
 }
 
+/*
+ * Open a PKS page-cache write scope on the current task if @mapping is
+ * protected. Nesting-safe via the saved previous protection value.
+ */
+static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
+					  const struct address_space *mapping)
+{
+	scope->active = pcache_pks_mapping(mapping);
+	if (unlikely(scope->active))
+		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE, 0);
+}
+
+/*
+ * Uncounted raw write scope for internal block-fill paths that operate on
+ * locked non-uptodate pool pages without a direct @mapping pointer.
+ */
+static inline void pcache_pks_scope_begin_raw(struct pcache_pks_scope *scope,
+					      bool cond)
+{
+	scope->active = pcache_pks_is_enabled() && cond;
+	if (unlikely(scope->active))
+		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE, 0);
+}
+
+/*
+ * Clamp PKS_KEY_PAGE_CACHE back to write-disabled across asynchronous or
+ * memory-reclaim execution, restoring the caller's state on exit.
+ */
+static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope)
+{
+	scope->active = pcache_pks_is_enabled();
+	if (unlikely(scope->active))
+		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE,
+						   PKEY_DISABLE_WRITE);
+}
+
+static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope)
+{
+	if (unlikely(scope->active))
+		pks_update_protection(PKS_KEY_PAGE_CACHE, scope->old);
+}
+
 #else /* !CONFIG_PCACHE_PKS */
 
 static inline void pcache_pks_pool_reserve(void) {}
@@ -63,6 +110,16 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 {
 	return false;
 }
+static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
+					  const struct address_space *mapping)
+{
+}
+static inline void pcache_pks_scope_begin_raw(struct pcache_pks_scope *scope,
+					      bool cond)
+{
+}
+static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope) {}
+static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
 
 #endif /* CONFIG_PCACHE_PKS */
 
