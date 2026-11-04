@@ -199,6 +199,7 @@ enum mapping_flags {
 	/* writeback related tags are not used */
 	AS_NO_WRITEBACK_TAGS = 5,
 	AS_LARGE_FOLIO_SUPPORT = 6,
+	AS_PKS_PROTECTED = 7,	/* page cache lives in the PKS pool */
 };
 
 /**
@@ -314,6 +315,16 @@ static inline bool mapping_large_folio_support(struct address_space *mapping)
 {
 	return IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) &&
 		test_bit(AS_LARGE_FOLIO_SUPPORT, &mapping->flags);
+}
+
+static inline void mapping_set_pks_protected(struct address_space *mapping)
+{
+	__set_bit(AS_PKS_PROTECTED, &mapping->flags);
+}
+
+static inline bool mapping_pks_protected(const struct address_space *mapping)
+{
+	return test_bit(AS_PKS_PROTECTED, &mapping->flags);
 }
 
 static inline int filemap_nr_thps(struct address_space *mapping)
