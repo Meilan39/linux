@@ -11,6 +11,7 @@
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/secretmem.h>
+#include <linux/pcache_pks.h>
 
 #include <linux/sched/signal.h>
 #include <linux/rwsem.h>
@@ -506,6 +507,11 @@ retry:
 		}
 	}
 
+	if (unlikely((flags & FOLL_WRITE) && pcache_pks_page(page))) {
+		page = ERR_PTR(-EFAULT);
+		goto out;
+	}
+
 	/* try_grab_page() does nothing unless FOLL_GET or FOLL_PIN is set. */
 	if (unlikely(!try_grab_page(page, flags))) {
 		page = ERR_PTR(-ENOMEM);
@@ -920,6 +926,10 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 		return -EOPNOTSUPP;
 
 	if (vma_is_secretmem(vma))
+		return -EFAULT;
+
+	if (write && (vm_flags & VM_SHARED) && vma->vm_file &&
+	    pcache_pks_file(vma->vm_file))
 		return -EFAULT;
 
 	if (write) {
@@ -2183,6 +2193,9 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 
 		VM_BUG_ON(!pfn_valid(pte_pfn(pte)));
 		page = pte_page(pte);
+
+		if (unlikely((flags & FOLL_WRITE) && pcache_pks_page(page)))
+			goto pte_unmap;
 
 		folio = try_grab_folio(page, 1, flags);
 		if (!folio)
