@@ -797,6 +797,30 @@ config ZONE_DEVICE
 
 	  If FS_DAX is enabled, then say Y.
 
+config PCACHE_PKS
+	bool "PKS page-cache protection (EXPERIMENTAL)"
+	depends on X86_64 && ARCH_HAS_SUPERVISOR_PKEYS
+	depends on !HIBERNATION
+	depends on !READ_ONLY_THP_FOR_FS
+	depends on !KASAN
+	select ARCH_ENABLE_PKS_CONSUMER
+	help
+	  Protect the page cache of selected ext4 mappings with a Supervisor
+	  Protection Key. Those pages are allocated from a pool of 2 MiB blocks
+	  taken from the buddy allocator on demand and returned under memory
+	  pressure; each block's direct-map leaf is tagged write-disabled, so a
+	  kernel store into a protected page outside an authorized write scope
+	  faults and is neutralized.
+
+	  The pool grows and shrinks with the protected working set and reserves
+	  no memory at boot. It is only active when booted with pcache_pks=on.
+
+	  Incompatible with hibernation (direct-map image save), the
+	  experimental read-only THP for filesystems (khugepaged collapse_file()
+	  stores), and KASAN (free-poisoning through the direct map).
+
+	  If unsure, say N.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN
