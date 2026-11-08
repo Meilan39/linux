@@ -4,6 +4,7 @@
 
 #include <linux/jump_label.h>
 #include <linux/mm.h>
+#include <linux/pagemap.h>
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 
@@ -49,6 +50,13 @@ static inline bool pcache_pks_page(const struct page *page)
 	       READ_ONCE(pcache_pks_block_map[idx]) != NULL;
 }
 
+/* Does @mapping keep its page cache in the PKS pool? */
+static inline bool pcache_pks_mapping(const struct address_space *mapping)
+{
+	return pcache_pks_is_enabled() &&
+	       mapping && mapping_pks_protected(mapping);
+}
+
 #else /* !CONFIG_PCACHE_PKS */
 
 static inline struct folio *pcache_pks_alloc_folio(gfp_t gfp,
@@ -65,7 +73,26 @@ static inline bool pcache_pks_page(const struct page *page)
 {
 	return false;
 }
+static inline bool pcache_pks_mapping(const struct address_space *mapping)
+{
+	return false;
+}
 
 #endif /* CONFIG_PCACHE_PKS */
+
+static inline bool pcache_pks_file(const struct file *file)
+{
+	return pcache_pks_mapping(file->f_mapping);
+}
+
+/*
+ * Protected mappings hold only pool folios, and pool folios belong only to
+ * protected mappings.
+ */
+static inline bool pcache_pks_folio_fits(const struct address_space *mapping,
+					 struct folio *folio)
+{
+	return pcache_pks_page(&folio->page) == pcache_pks_mapping(mapping);
+}
 
 #endif /* _LINUX_PCACHE_PKS_H */

@@ -814,6 +814,7 @@ void replace_page_cache_page(struct page *old, struct page *new)
 	VM_BUG_ON_PAGE(!PageLocked(old), old);
 	VM_BUG_ON_PAGE(!PageLocked(new), new);
 	VM_BUG_ON_PAGE(new->mapping, new);
+	BUG_ON(!pcache_pks_folio_fits(mapping, fnew));
 
 	get_page(new);
 	new->mapping = mapping;
@@ -851,6 +852,8 @@ noinline int __filemap_add_folio(struct address_space *mapping,
 
 	VM_BUG_ON_FOLIO(!folio_test_locked(folio), folio);
 	VM_BUG_ON_FOLIO(folio_test_swapbacked(folio), folio);
+	if (unlikely(!pcache_pks_folio_fits(mapping, folio)))
+		return -EPERM;
 	mapping_set_update(&xas, mapping);
 
 	if (!huge) {
@@ -1989,7 +1992,7 @@ no_page:
 		if (fgp_flags & FGP_NOFS)
 			gfp &= ~__GFP_FS;
 
-		folio = filemap_alloc_folio(gfp, 0);
+		folio = filemap_alloc_folio_for_mapping(mapping, gfp, 0);
 		if (!folio)
 			return NULL;
 
@@ -2519,7 +2522,8 @@ static int filemap_create_folio(struct file *file,
 	struct folio *folio;
 	int error;
 
-	folio = filemap_alloc_folio(mapping_gfp_mask(mapping), 0);
+	folio = filemap_alloc_folio_for_mapping(mapping,
+						mapping_gfp_mask(mapping), 0);
 	if (!folio)
 		return -ENOMEM;
 
@@ -3152,6 +3156,8 @@ retry_find:
 			if (fpin)
 				goto out_retry;
 			filemap_invalidate_unlock_shared(mapping);
+			if (pcache_pks_mapping(mapping))
+				return VM_FAULT_SIGBUS;
 			return VM_FAULT_OOM;
 		}
 	}
@@ -3490,7 +3496,7 @@ static struct folio *do_read_cache_folio(struct address_space *mapping,
 repeat:
 	folio = filemap_get_folio(mapping, index);
 	if (!folio) {
-		folio = filemap_alloc_folio(gfp, 0);
+		folio = filemap_alloc_folio_for_mapping(mapping, gfp, 0);
 		if (!folio)
 			return ERR_PTR(-ENOMEM);
 		err = filemap_add_folio(mapping, folio, index, gfp);
