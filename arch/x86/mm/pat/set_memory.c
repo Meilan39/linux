@@ -1984,6 +1984,58 @@ int set_memory_global(unsigned long addr, int numpages)
 }
 
 /*
+ * Stamp a protection key onto a direct-map range, flushing the TLB as usual.
+ * The PKS page-cache pool uses the noflush variant below for batched tagging;
+ * this simple form is kept for single callers and boot-time use.
+ */
+int set_memory_pkey(unsigned long addr, int numpages, int pkey)
+{
+	return change_page_attr_set_clr(&addr, numpages,
+					__pgprot(_PAGE_PKEY(pkey)),
+					__pgprot(_PAGE_PKEY_MASK), 0, 0, NULL);
+}
+
+/*
+ * Stamp a protection key onto a direct-map range WITHOUT flushing the TLB, so a
+ * caller tagging many PMD-aligned blocks can coalesce the flush into one IPI.
+ *
+ * The caller is responsible for the flush, and for calling vm_unmap_aliases()
+ * once before a batch so no lazy vmalloc alias of these pages survives untagged.
+ * @need_flush_all is latched true when a single per-leaf invlpg is NOT enough:
+ *   - cpa.force_flush_all: cpa_process_alias() also rewrote the high kernel-image
+ *     alias (__START_KERNEL_map) of a page inside the kernel text map, and
+ *   - PG_LEVEL_4K: the 2 MiB PMD was already split to 512 PTEs by an earlier
+ *     user, so the leaf's translation is not covered by one invlpg on its base.
+ * In either case the caller must fall back to flush_tlb_all() for the batch.
+ */
+int set_memory_pkey_noflush(unsigned long addr, int numpages, int pkey,
+			    bool *need_flush_all)
+{
+	struct cpa_data cpa = {
+		.vaddr	  = &addr,
+		.numpages = numpages,
+		.mask_set = canon_pgprot(__pgprot(_PAGE_PKEY(pkey))),
+		.mask_clr = __pgprot(_PAGE_PKEY_MASK),
+		.flags	  = 0,
+		.curpage  = 0,
+	};
+	unsigned int level;
+	int ret;
+
+	ret = __change_page_attr_set_clr(&cpa, 1);
+	if (ret)
+		return ret;
+
+	if (need_flush_all) {
+		pte_t *pte = lookup_address(addr, &level);
+
+		if (cpa.force_flush_all || !pte || level == PG_LEVEL_4K)
+			*need_flush_all = true;
+	}
+	return 0;
+}
+
+/*
  * __set_memory_enc_pgtable() is used for the hypervisors that get
  * informed about "encryption" status via page tables.
  */
