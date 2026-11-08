@@ -39,6 +39,7 @@
 #include <linux/vmstat.h>
 #include <linux/workqueue.h>
 #include <linux/writeback.h>
+#include <asm/insn.h>
 #include <asm/set_memory.h>
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -997,3 +998,43 @@ err_free:
 	return 0;
 }
 subsys_initcall(pcache_pks_init);
+
+bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
+			       bool write)
+{
+	struct insn insn;
+
+	/*
+	 * PKS_KEY_PAGE_CACHE is configured write-disabled only; a read fault
+	 * indicates unexpected key state and fails closed.
+	 */
+	if (!write)
+		return false;
+
+	/*
+	 * In synchronous user-task context the offending task dies as well, on
+	 * its way back to user mode. Exiting from this exception instead would
+	 * abandon every lock, page reference and preempt count its kernel path
+	 * holds, so that path has to unwind normally.
+	 */
+	if (!in_interrupt() && !(current->flags & PF_KTHREAD)) {
+		pr_warn_ratelimited("pcache_pks: unauthorized write by '%s'[%d] at %px (IP %pS), killing task\n",
+				    current->comm, current->pid,
+				    (void *)address, (void *)regs->ip);
+		force_sig(SIGKILL);
+	}
+
+	/*
+	 * In every context, decode and advance past the faulting store
+	 * instruction so that it never retires.
+	 */
+	if (insn_decode_kernel(&insn, (void *)regs->ip) == 0 &&
+	    insn.length > 0 && insn.length <= MAX_INSN_SIZE) {
+		pr_warn_ratelimited("pcache_pks: suppressed stray store at %pS\n",
+				    (void *)regs->ip);
+		regs->ip += insn.length;
+		return true;
+	}
+
+	return false;
+}

@@ -804,6 +804,7 @@ config PCACHE_PKS
 	depends on !READ_ONLY_THP_FOR_FS
 	depends on !KASAN
 	select ARCH_ENABLE_PKS_CONSUMER
+	select INSTRUCTION_DECODER
 	help
 	  Protect the page cache of selected ext4 mappings with a Supervisor
 	  Protection Key. Those pages are allocated from a pool of 2 MiB blocks

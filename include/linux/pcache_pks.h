@@ -10,6 +10,7 @@
 #include <linux/sched.h>
 
 struct pks_block;
+struct pt_regs;
 
 struct pcache_pks_scope {
 	u8 old;
@@ -32,6 +33,8 @@ extern unsigned long pcache_pks_nr_blocks_max;
 
 struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order);
 void pcache_pks_recycle_page(struct page *page);
+bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
+			       bool write);
 
 /* Is the PKS page-cache pool active? */
 static inline bool pcache_pks_is_enabled(void)
