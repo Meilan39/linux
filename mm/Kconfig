@@ -822,6 +822,21 @@ config PCACHE_PKS
 
 	  If unsure, say N.
 
+config PCACHE_PKS_DEBUG
+	bool "PKS page-cache protection debugging"
+	depends on PCACHE_PKS && DEBUG_FS
+	help
+	  Expose /sys/kernel/debug/pcache_pks/status (pool size and free
+	  pages, block growth and release counts, write scopes opened, pages
+	  reclaimed, unauthorized stores neutralized, scope leaks) and
+	  /sys/kernel/debug/pcache_pks/blocks (one PFN range per active block).
+
+	  Also audit each block's direct-map protection key after tagging and
+	  after release, and check on every return to user mode that no write
+	  scope is still open.
+
+	  Leave disabled for performance measurements.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN

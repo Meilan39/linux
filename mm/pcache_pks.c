@@ -17,6 +17,7 @@
 #include <linux/bitmap.h>
 #include <linux/cpu.h>
 #include <linux/cpuhotplug.h>
+#include <linux/debugfs.h>
 #include <linux/export.h>
 #include <linux/gfp.h>
 #include <linux/jiffies.h>
@@ -31,6 +32,7 @@
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
+#include <linux/seq_file.h>
 #include <linux/shrinker.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -113,6 +115,176 @@ unsigned long pcache_pks_nr_blocks_max __read_mostly;
 EXPORT_SYMBOL_GPL(pcache_pks_nr_blocks_max);
 
 static bool pcache_pks_param __initdata;
+
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+atomic64_t pcache_pks_scope_count = ATOMIC64_INIT(0);
+EXPORT_SYMBOL_GPL(pcache_pks_scope_count);
+static atomic64_t pcache_pks_reclaim_count = ATOMIC64_INIT(0);
+static atomic64_t pcache_pks_suppressed_fault_count = ATOMIC64_INIT(0);
+static atomic64_t pcache_pks_grow_blocks = ATOMIC64_INIT(0);
+static atomic64_t pcache_pks_release_block_count = ATOMIC64_INIT(0);
+static atomic64_t pcache_pks_grow_failures = ATOMIC64_INIT(0);
+static atomic64_t pcache_pks_grow_fail_fallbacks = ATOMIC64_INIT(0);
+static atomic64_t pcache_pks_fallback_timeouts = ATOMIC64_INIT(0);
+
+static inline void pcache_pks_add_reclaimed(unsigned long nr)
+{
+	if (nr)
+		atomic64_add(nr, &pcache_pks_reclaim_count);
+}
+static inline void pcache_pks_count_suppressed_fault(void)
+{
+	atomic64_inc(&pcache_pks_suppressed_fault_count);
+}
+static inline void pcache_pks_count_grow(unsigned long nr)
+{
+	if (nr)
+		atomic64_add(nr, &pcache_pks_grow_blocks);
+}
+static inline void pcache_pks_count_release(unsigned long nr)
+{
+	if (nr)
+		atomic64_add(nr, &pcache_pks_release_block_count);
+}
+static inline void pcache_pks_count_grow_failure(void)
+{
+	atomic64_inc(&pcache_pks_grow_failures);
+}
+static inline void pcache_pks_count_fallback(void)
+{
+	atomic64_inc(&pcache_pks_grow_fail_fallbacks);
+}
+static inline void pcache_pks_count_fallback_timeout(void)
+{
+	atomic64_inc(&pcache_pks_fallback_timeouts);
+}
+
+/*
+ * Invariant audit: every direct-map entry covering the 2 MiB block at @addr
+ * must carry @pkey -- PKS_KEY_PAGE_CACHE after growth (before publication),
+ * 0 after release (before the free). Catches a CPA path that silently drops
+ * or misplaces the key, which would otherwise surface only as a missing fault.
+ */
+static void pks_audit_block(unsigned long addr, int pkey)
+{
+	unsigned long end = addr + PMD_SIZE;
+	unsigned int level;
+
+	while (addr < end) {
+		pte_t *pte = lookup_address(addr, &level);
+
+		if (WARN_ONCE(!pte || pte_flags_pkey(pte_val(*pte)) != pkey,
+			      "pcache_pks: direct map at %lx has key %d, expected %d\n",
+			      addr, pte ? (int)pte_flags_pkey(pte_val(*pte)) : -1,
+			      pkey))
+			return;
+		addr += page_level_size(level);
+	}
+}
+
+static atomic64_t pcache_pks_scope_leaks = ATOMIC64_INIT(0);
+
+/*
+ * Called with IRQs disabled on every return to user mode. A write scope must
+ * never survive the syscall or exception that opened it; if one did, report it
+ * and re-disable writes so the leak is not usable from user space.
+ */
+void pcache_pks_check_user_return(void)
+{
+	u32 prot;
+
+	if (!pcache_pks_is_enabled())
+		return;
+	prot = (current->thread.pkrs >> PKR_PKEY_SHIFT(PKS_KEY_PAGE_CACHE)) &
+	       PKEY_ACCESS_MASK;
+	if (likely(prot & (PKEY_DISABLE_WRITE | PKEY_DISABLE_ACCESS)))
+		return;
+	atomic64_inc(&pcache_pks_scope_leaks);
+	WARN_ONCE(1, "pcache_pks: write scope leaked to user mode (%s[%d])\n",
+		  current->comm, current->pid);
+	pks_update_protection(PKS_KEY_PAGE_CACHE, PKEY_DISABLE_WRITE);
+}
+
+static int pcache_pks_status_show(struct seq_file *m, void *v)
+{
+	unsigned long flags;
+	unsigned long blocks, empty, free_pages;
+
+	spin_lock_irqsave(&pks_pool.lock, flags);
+	blocks = pks_pool.nr_blocks;
+	empty = pks_pool.nr_empty;
+	free_pages = pks_pool.nr_free_pages;
+	spin_unlock_irqrestore(&pks_pool.lock, flags);
+
+	seq_printf(m, "enabled:             %d\n", pcache_pks_is_enabled());
+	seq_printf(m, "block_map_entries:   %lu\n", pcache_pks_nr_blocks_max);
+	seq_printf(m, "pool_blocks:         %lu\n", blocks);
+	seq_printf(m, "pool_empty_blocks:   %lu\n", empty);
+	seq_printf(m, "pool_pages:          %lu\n", blocks * PKS_BLOCK_PAGES);
+	seq_printf(m, "pool_free_pages:     %lu\n", free_pages);
+	seq_printf(m, "scope_count:         %lld\n",
+		   (long long)atomic64_read(&pcache_pks_scope_count));
+	seq_printf(m, "reclaim_pages:       %lld\n",
+		   (long long)atomic64_read(&pcache_pks_reclaim_count));
+	seq_printf(m, "grow_blocks:         %lld\n",
+		   (long long)atomic64_read(&pcache_pks_grow_blocks));
+	seq_printf(m, "release_blocks:      %lld\n",
+		   (long long)atomic64_read(&pcache_pks_release_block_count));
+	seq_printf(m, "grow_failures:       %lld\n",
+		   (long long)atomic64_read(&pcache_pks_grow_failures));
+	seq_printf(m, "grow_fail_fallbacks: %lld\n",
+		   (long long)atomic64_read(&pcache_pks_grow_fail_fallbacks));
+	seq_printf(m, "fallback_timeouts:   %lld\n",
+		   (long long)atomic64_read(&pcache_pks_fallback_timeouts));
+	seq_printf(m, "suppressed_faults:   %lld\n",
+		   (long long)atomic64_read(&pcache_pks_suppressed_fault_count));
+	seq_printf(m, "scope_leaks:         %lld\n",
+		   (long long)atomic64_read(&pcache_pks_scope_leaks));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(pcache_pks_status);
+
+static void pcache_pks_blocks_list(struct seq_file *m, struct list_head *head)
+{
+	struct pks_block *b;
+
+	list_for_each_entry(b, head, list)
+		seq_printf(m, "0x%lx 0x%lx %u\n", b->base_pfn,
+			   b->base_pfn + PKS_BLOCK_PAGES, b->nr_free);
+}
+
+/* One "start_pfn end_pfn nr_free" line per active block, for PFN membership. */
+static int pcache_pks_blocks_show(struct seq_file *m, void *v)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&pks_pool.lock, flags);
+	pcache_pks_blocks_list(m, &pks_pool.partial);
+	pcache_pks_blocks_list(m, &pks_pool.full);
+	pcache_pks_blocks_list(m, &pks_pool.empty);
+	spin_unlock_irqrestore(&pks_pool.lock, flags);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(pcache_pks_blocks);
+
+static void pcache_pks_debugfs_init(void)
+{
+	struct dentry *dir = debugfs_create_dir("pcache_pks", NULL);
+
+	debugfs_create_file("status", 0444, dir, NULL, &pcache_pks_status_fops);
+	debugfs_create_file("blocks", 0444, dir, NULL, &pcache_pks_blocks_fops);
+}
+#else /* !CONFIG_PCACHE_PKS_DEBUG */
+static inline void pcache_pks_add_reclaimed(unsigned long nr) {}
+static inline void pcache_pks_count_suppressed_fault(void) {}
+static inline void pcache_pks_count_grow(unsigned long nr) {}
+static inline void pcache_pks_count_release(unsigned long nr) {}
+static inline void pcache_pks_count_grow_failure(void) {}
+static inline void pcache_pks_count_fallback(void) {}
+static inline void pcache_pks_count_fallback_timeout(void) {}
+static inline void pks_audit_block(unsigned long addr, int pkey) {}
+static inline void pcache_pks_debugfs_init(void) {}
+#endif /* CONFIG_PCACHE_PKS_DEBUG */
 
 static int __init setup_pcache_pks(char *str)
 {
@@ -343,6 +515,9 @@ static void pks_release_blocks(struct pks_block **batch, unsigned int n)
 	else
 		flush_tlb_kernel_leaves(addrs, n);
 
+	for (i = 0; i < n; i++)
+		pks_audit_block(addrs[i], 0);
+
 	mod_node_page_state(NODE_DATA(first_online_node),
 			    NR_KERNEL_MISC_RECLAIMABLE,
 			    -(long)(n * PKS_BLOCK_PAGES));
@@ -354,6 +529,7 @@ static void pks_release_blocks(struct pks_block **batch, unsigned int n)
 		__free_pages(head, PKS_BLOCK_ORDER);
 		kfree(batch[i]);
 	}
+	pcache_pks_count_release(n);
 	if (current->reclaim_state)
 		current->reclaim_state->reclaimed_slab += n * PKS_BLOCK_PAGES;
 }
@@ -496,6 +672,9 @@ static struct page *pks_grow(gfp_t gfp)
 		goto out_unlock;
 	}
 
+	for (i = 0; i < n; i++)
+		pks_audit_block(addrs[i], PKS_KEY_PAGE_CACHE);
+
 	/* Publish only after every CPU has the tagged translation. */
 	spin_lock_irqsave(&pks_pool.lock, flags);
 	for (i = 0; i < n; i++) {
@@ -518,7 +697,10 @@ static struct page *pks_grow(gfp_t gfp)
 	mod_node_page_state(NODE_DATA(first_online_node),
 			    NR_KERNEL_MISC_RECLAIMABLE,
 			    n * PKS_BLOCK_PAGES - 1);
+	pcache_pks_count_grow(n);
 out_unlock:
+	if (!page)
+		pcache_pks_count_grow_failure();
 	mutex_unlock(&pks_tag_mutex);
 	if (!page && !(gfp & __GFP_NOWARN))
 		pr_warn_ratelimited("pcache_pks: block growth failed\n");
@@ -606,6 +788,7 @@ unlock_put:
 	m = this_cpu_ptr(&pks_mags);
 	pks_drain(m, false);
 	local_irq_restore(flags);
+	pcache_pks_add_reclaimed(reclaimed);
 	return reclaimed;
 }
 
@@ -727,6 +910,7 @@ static struct page *pks_reclaim_inpool(gfp_t gfp)
 	bool dirty = false;
 	int tries;
 
+	pcache_pks_count_fallback();
 	local_irq_save(flags);
 	m = this_cpu_ptr(&pks_mags);
 	pks_drain(m, false);
@@ -771,6 +955,8 @@ static struct page *pks_reclaim_inpool(gfp_t gfp)
 			wakeup_flusher_threads(WB_REASON_VMSCAN);
 		}
 	}
+	if (tries == PKS_WRITEBACK_RETRIES)
+		pcache_pks_count_fallback_timeout();
 	return NULL;
 }
 
@@ -987,6 +1173,7 @@ static int __init pcache_pks_init(void)
 	}
 
 	static_branch_enable(&pcache_pks_enabled);
+	pcache_pks_debugfs_init();
 	pr_info("pcache_pks: dynamic PKS page-cache pool enabled (%lu-entry block map)\n",
 		nr);
 	return 0;
@@ -1030,6 +1217,7 @@ bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
 	 */
 	if (insn_decode_kernel(&insn, (void *)regs->ip) == 0 &&
 	    insn.length > 0 && insn.length <= MAX_INSN_SIZE) {
+		pcache_pks_count_suppressed_fault();
 		pr_warn_ratelimited("pcache_pks: suppressed stray store at %pS\n",
 				    (void *)regs->ip);
 		regs->ip += insn.length;

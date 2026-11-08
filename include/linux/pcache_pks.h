@@ -66,6 +66,18 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 	       mapping && mapping_pks_protected(mapping);
 }
 
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+extern atomic64_t pcache_pks_scope_count;
+static inline void pcache_pks_count_scope(void)
+{
+	atomic64_inc(&pcache_pks_scope_count);
+}
+void pcache_pks_check_user_return(void);
+#else
+static inline void pcache_pks_count_scope(void) {}
+static inline void pcache_pks_check_user_return(void) {}
+#endif
+
 /*
  * Open a PKS page-cache write scope on the current task if @mapping is
  * protected. Nesting-safe via the saved previous protection value.
@@ -74,8 +86,10 @@ static inline void pcache_pks_scope_begin(struct pcache_pks_scope *scope,
 					  const struct address_space *mapping)
 {
 	scope->active = pcache_pks_mapping(mapping);
-	if (unlikely(scope->active))
+	if (unlikely(scope->active)) {
+		pcache_pks_count_scope();
 		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE, 0);
+	}
 }
 
 /*
@@ -148,6 +162,7 @@ static inline void pcache_pks_scope_begin_raw(struct pcache_pks_scope *scope,
 }
 static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope) {}
 static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
+static inline void pcache_pks_check_user_return(void) {}
 
 #endif /* CONFIG_PCACHE_PKS */
 
