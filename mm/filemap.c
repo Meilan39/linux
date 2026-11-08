@@ -3758,10 +3758,12 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 	loff_t pos = iocb->ki_pos;
 	struct address_space *mapping = file->f_mapping;
 	const struct address_space_operations *a_ops = mapping->a_ops;
+	struct pcache_pks_scope pks_scope;
 	long status = 0;
 	ssize_t written = 0;
 	unsigned int flags = 0;
 
+	pcache_pks_scope_begin(&pks_scope, mapping);
 	do {
 		struct page *page;
 		unsigned long offset;	/* Offset into pagecache page */
@@ -3826,6 +3828,7 @@ again:
 
 		balance_dirty_pages_ratelimited(mapping);
 	} while (iov_iter_count(i));
+	pcache_pks_scope_end(&pks_scope);
 
 	return written ? written : status;
 }
