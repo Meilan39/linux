@@ -18,6 +18,12 @@ enum pks_stat_item {
 	PKS_STAT_INPOOL_TIMEOUT,/* in-pool reclaims that waited in vain */
 	PKS_STAT_EVICTED,	/* pages the pool evicted itself */
 	PKS_STAT_REFUSED,	/* write grants refused */
+	PKS_STAT_FAULT_STORE,	/* faults by instruction class, in the */
+	PKS_STAT_FAULT_STRING,	/* order of enum pks_insn_class */
+	PKS_STAT_FAULT_RMW,
+	PKS_STAT_FAULT_OTHER,
+	PKS_STAT_FAULT_COMPLETED,/* faults after which the context went on */
+	PKS_STAT_FAULT_STOPPED,	/* faults the handler declined */
 	PKS_NR_STATS,
 };
 
@@ -57,6 +63,19 @@ void pks_pool_info(struct pks_pool_info *info);
 /* scope.c */
 extern const char * const pks_site_names[PKS_NR_SITES];
 unsigned long pks_scope_count(enum pcache_pks_site site);
+
+/* fault.c */
+enum pks_insn_class {
+	PKS_INSN_STORE,		/* a move to memory */
+	PKS_INSN_STRING,	/* movs, stos */
+	PKS_INSN_RMW,		/* add, or, adc, sbb, and, sub, xor to memory */
+	PKS_INSN_OTHER,		/* anything else, and anything locked */
+	PKS_NR_INSN_CLASSES,
+};
+
+unsigned long pks_alu_flags(unsigned int op, unsigned int bits,
+			    unsigned long dst, unsigned long src,
+			    unsigned long flags);
 
 /* alias.c: the second, writable mapping of protected memory */
 int pks_alias_init(void);

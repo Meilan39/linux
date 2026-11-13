@@ -804,6 +804,7 @@ config PCACHE_PKS
 	depends on !READ_ONLY_THP_FOR_FS
 	depends on !KASAN
 	select ARCH_ENABLE_PKS_CONSUMER
+	select INSTRUCTION_DECODER
 	help
 	  Keep the page cache of selected mappings in memory whose kernel
 	  mapping carries a supervisor protection key (PKS). The key is
@@ -817,6 +818,11 @@ config PCACHE_PKS
 	  The protection is active only when the kernel is booted with
 	  pcache_pks=on. /sys/kernel/mm/pcache_pks/ then reports the pool's
 	  size and event counters.
+
+	  A store that was not granted never happens. By default the kernel
+	  finishes the faulting instruction without its store and goes on,
+	  killing the task if a user task attempted it; pcache_pks.fault=stop
+	  makes such a store an oops instead.
 
 	  Incompatible with hibernation (the image is saved through the
 	  direct map), with read-only THP for filesystems (khugepaged copies

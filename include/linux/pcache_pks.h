@@ -10,6 +10,8 @@
 #include <linux/pks-keys.h>
 #include <linux/sched.h>
 
+struct pt_regs;
+
 /*
  * Write scopes
  * ------------
@@ -57,6 +59,8 @@ struct pcache_pks_scope {
 
 struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order);
 void pcache_pks_recycle_page(struct page *page);
+bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
+			       bool write);
 
 /* Does @mapping keep its page cache in protected pages? */
 static inline bool pcache_pks_mapping(const struct address_space *mapping)

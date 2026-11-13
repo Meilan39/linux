@@ -11,6 +11,7 @@
  *   pool.c	placement: which memory is tagged, and when
  *   alias.c	the second mapping, through which granted stores are made
  *   scope.c	write scopes: who is granted access to the alias, and when
+ *   fault.c	what happens to a store that was not granted
  */
 #define pr_fmt(fmt) "pcache_pks: " fmt
 
@@ -90,6 +91,8 @@ PKS_STAT_ATTR(tag_ops, PKS_STAT_TAG);
 PKS_STAT_ATTR(untag_ops, PKS_STAT_UNTAG);
 PKS_STAT_ATTR(tlb_flushes, PKS_STAT_FLUSH);
 PKS_STAT_ATTR(refused_grants, PKS_STAT_REFUSED);
+PKS_STAT_ATTR(suppressed_faults, PKS_STAT_FAULT_COMPLETED);
+PKS_STAT_ATTR(stopped_faults, PKS_STAT_FAULT_STOPPED);
 
 static ssize_t scope_count_show(struct kobject *kobj,
 				struct kobj_attribute *attr, char *buf)
@@ -132,6 +135,8 @@ static struct attribute *pcache_pks_attrs[] = {
 	&tlb_flushes_attr.attr,
 	&scope_count_attr.attr,
 	&refused_grants_attr.attr,
+	&suppressed_faults_attr.attr,
+	&stopped_faults_attr.attr,
 	NULL,
 };
 
