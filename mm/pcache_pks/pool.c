@@ -1022,6 +1022,29 @@ static int pks_cpu_offline(unsigned int cpu)
 	return 0;
 }
 
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+static void pks_show_list(struct seq_file *m, struct list_head *head)
+{
+	struct pks_block *b;
+
+	list_for_each_entry(b, head, list)
+		seq_printf(m, "0x%lx 0x%lx %u\n", b->base_pfn,
+			   b->base_pfn + PKS_BLOCK_PAGES, b->nr_free);
+}
+
+/* One "start_pfn end_pfn nr_free" line per block that is on a list. */
+void pks_pool_show_blocks(struct seq_file *m)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&pks_pool.lock, flags);
+	pks_show_list(m, &pks_pool.partial);
+	pks_show_list(m, &pks_pool.full);
+	pks_show_list(m, &pks_pool.empty);
+	spin_unlock_irqrestore(&pks_pool.lock, flags);
+}
+#endif
+
 void pks_pool_info(struct pks_pool_info *info)
 {
 	unsigned long flags;

@@ -12,6 +12,7 @@
  *   alias.c	the second mapping, through which granted stores are made
  *   scope.c	write scopes: who is granted access to the alias, and when
  *   fault.c	what happens to a store that was not granted
+ *   debug.c	invariant checks and detailed state, in debug kernels
  */
 #define pr_fmt(fmt) "pcache_pks: " fmt
 
@@ -173,6 +174,7 @@ static int __init pcache_pks_init(void)
 
 	static_branch_enable(&pcache_pks_enabled);
 	pcache_pks_sysfs_init();
+	pks_debug_init();
 	pr_info("page-cache protection enabled (%lu-entry block map)\n",
 		pcache_pks_nr_blocks_max);
 	return 0;

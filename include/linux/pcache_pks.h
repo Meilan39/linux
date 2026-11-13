@@ -9,6 +9,7 @@
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 #include <linux/sched.h>
+#include <linux/timex.h>
 
 struct pt_regs;
 
@@ -53,6 +54,10 @@ enum pcache_pks_site {
 struct pcache_pks_scope {
 	u8 old;
 	bool active;
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+	u8 site;		/* PKS_NR_SITES for a clamp */
+	u64 start;
+#endif
 };
 
 #ifdef CONFIG_PCACHE_PKS
@@ -72,6 +77,34 @@ static inline bool pcache_pks_mapping(const struct address_space *mapping)
 DECLARE_PER_CPU(unsigned long [PKS_NR_SITES], pcache_pks_scope_count);
 void pcache_pks_grant_refused(enum pcache_pks_site site);
 
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+void pcache_pks_check_user_return(void);
+void pcache_pks_window_account(enum pcache_pks_site site, u64 cycles);
+
+/* Debug kernels measure how long each scope keeps write access open. */
+static inline void pcache_pks_window_open(struct pcache_pks_scope *scope,
+					  unsigned int site)
+{
+	scope->site = site;
+	if (site < PKS_NR_SITES)
+		scope->start = get_cycles();
+}
+
+static inline void pcache_pks_window_close(struct pcache_pks_scope *scope)
+{
+	if (scope->site < PKS_NR_SITES)
+		pcache_pks_window_account(scope->site,
+					  get_cycles() - scope->start);
+}
+#else
+static inline void pcache_pks_check_user_return(void) {}
+static inline void pcache_pks_window_open(struct pcache_pks_scope *scope,
+					  unsigned int site)
+{
+}
+static inline void pcache_pks_window_close(struct pcache_pks_scope *scope) {}
+#endif
+
 static inline void __pcache_pks_scope_open(struct pcache_pks_scope *scope,
 					   enum pcache_pks_site site)
 {
@@ -79,6 +112,7 @@ static inline void __pcache_pks_scope_open(struct pcache_pks_scope *scope,
 	scope->active = true;
 	scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE_W,
 					   PKEY_READ_WRITE);
+	pcache_pks_window_open(scope, site);
 }
 
 /**
@@ -233,16 +267,20 @@ static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope)
 			!((READ_ONCE(current->thread.pkrs) >>
 			   PKR_PKEY_SHIFT(PKS_KEY_PAGE_CACHE_W)) &
 			  (PKEY_DISABLE_ACCESS | PKEY_DISABLE_WRITE));
-	if (unlikely(scope->active))
+	if (unlikely(scope->active)) {
 		scope->old = pks_update_protection(PKS_KEY_PAGE_CACHE_W,
 						   PKEY_DISABLE_WRITE);
+		pcache_pks_window_open(scope, PKS_NR_SITES);
+	}
 }
 
 /* Close a scope or a clamp: restore what was in effect before it. */
 static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope)
 {
-	if (unlikely(scope->active))
+	if (unlikely(scope->active)) {
 		pks_update_protection(PKS_KEY_PAGE_CACHE_W, scope->old);
+		pcache_pks_window_close(scope);
+	}
 }
 
 #else /* !CONFIG_PCACHE_PKS */
@@ -291,6 +329,7 @@ static inline void pcache_pks_scope_begin_fill(struct pcache_pks_scope *scope,
 }
 static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope) {}
 static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
+static inline void pcache_pks_check_user_return(void) {}
 
 #endif /* CONFIG_PCACHE_PKS */
 

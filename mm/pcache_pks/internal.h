@@ -24,6 +24,7 @@ enum pks_stat_item {
 	PKS_STAT_FAULT_OTHER,
 	PKS_STAT_FAULT_COMPLETED,/* faults after which the context went on */
 	PKS_STAT_FAULT_STOPPED,	/* faults the handler declined */
+	PKS_STAT_SCOPE_LEAK,	/* scopes found open on return to user mode */
 	PKS_NR_STATS,
 };
 
@@ -60,6 +61,20 @@ struct page *pks_pool_alloc(gfp_t gfp);
 void pks_pool_free(struct page *page);
 void pks_pool_info(struct pks_pool_info *info);
 
+/* debug.c */
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+struct seq_file;
+void pks_debug_init(void);
+void pks_audit_range(unsigned long addr, unsigned long size, int pkey);
+void pks_pool_show_blocks(struct seq_file *m);
+#else
+static inline void pks_debug_init(void) {}
+static inline void pks_audit_range(unsigned long addr, unsigned long size,
+				   int pkey)
+{
+}
+#endif
+
 /* scope.c */
 extern const char * const pks_site_names[PKS_NR_SITES];
 unsigned long pks_scope_count(enum pcache_pks_site site);
@@ -87,11 +102,6 @@ void pks_alias_unmap(unsigned long addr, unsigned long size,
 static inline unsigned long pks_alias_addr(unsigned long addr)
 {
 	return addr + pcache_pks_alias_delta;
-}
-
-static inline void pks_audit_range(unsigned long addr, unsigned long size,
-				   int pkey)
-{
 }
 
 #endif /* _MM_PCACHE_PKS_INTERNAL_H */
