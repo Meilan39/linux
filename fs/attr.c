@@ -17,6 +17,7 @@
 #include <linux/security.h>
 #include <linux/evm.h>
 #include <linux/ima.h>
+#include <linux/pcache_pks.h>
 
 /**
  * chown_ok - verify permissions to chown inode
@@ -312,6 +313,7 @@ int notify_change(struct user_namespace *mnt_userns, struct dentry *dentry,
 {
 	struct inode *inode = dentry->d_inode;
 	umode_t mode = inode->i_mode;
+	struct pcache_pks_scope pks_scope = {};
 	int error;
 	struct timespec64 now;
 	unsigned int ia_valid = attr->ia_valid;
@@ -406,10 +408,18 @@ int notify_change(struct user_namespace *mnt_userns, struct dentry *dentry,
 	if (error)
 		return error;
 
+	/* A change of size zeroes the part of a page beyond the new end. */
+	if (ia_valid & ATTR_SIZE) {
+		error = pcache_pks_scope_begin_inode(&pks_scope,
+						     PKS_SITE_TRUNCATE, inode);
+		if (error)
+			return error;
+	}
 	if (inode->i_op->setattr)
 		error = inode->i_op->setattr(mnt_userns, dentry, attr);
 	else
 		error = simple_setattr(mnt_userns, dentry, attr);
+	pcache_pks_scope_end(&pks_scope);
 
 	if (!error) {
 		fsnotify_change(dentry, ia_valid);

@@ -3758,9 +3758,20 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 	loff_t pos = iocb->ki_pos;
 	struct address_space *mapping = file->f_mapping;
 	const struct address_space_operations *a_ops = mapping->a_ops;
+	struct pcache_pks_scope pks_scope;
 	long status = 0;
 	ssize_t written = 0;
 	unsigned int flags = 0;
+
+	/*
+	 * Every buffered write of a protected file stores here, whichever
+	 * entry point it came through. Ask for write access here as well, so
+	 * that the test of the caller's authority cannot be bypassed.
+	 */
+	status = pcache_pks_scope_begin_file(&pks_scope,
+					     PKS_SITE_BUFFERED_WRITE, file);
+	if (status)
+		return status;
 
 	do {
 		struct page *page;
@@ -3826,6 +3837,7 @@ again:
 
 		balance_dirty_pages_ratelimited(mapping);
 	} while (iov_iter_count(i));
+	pcache_pks_scope_end(&pks_scope);
 
 	return written ? written : status;
 }

@@ -24,6 +24,7 @@
 #include <linux/fs.h>
 #include <linux/personality.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/syscalls.h>
 #include <linux/rcupdate.h>
 #include <linux/audit.h>
@@ -228,6 +229,7 @@ SYSCALL_DEFINE2(ftruncate64, unsigned int, fd, loff_t, length)
 int vfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 {
 	struct inode *inode = file_inode(file);
+	struct pcache_pks_scope pks_scope;
 	long ret;
 
 	if (offset < 0 || len <= 0)
@@ -305,7 +307,12 @@ int vfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		return -EOPNOTSUPP;
 
 	file_start_write(file);
-	ret = file->f_op->fallocate(file, mode, offset, len);
+	/* Punch hole, zero range and collapse zero partial blocks in place. */
+	ret = pcache_pks_scope_begin_file(&pks_scope, PKS_SITE_FALLOCATE, file);
+	if (!ret) {
+		ret = file->f_op->fallocate(file, mode, offset, len);
+		pcache_pks_scope_end(&pks_scope);
+	}
 
 	/*
 	 * Create inotify and fanotify events.
