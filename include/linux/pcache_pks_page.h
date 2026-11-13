@@ -18,6 +18,9 @@ struct pks_block;
  * A protected page-cache page lives inside a 2 MiB (PMD) block whose direct-map
  * leaf is tagged PKS_KEY_PAGE_CACHE. Blocks are taken from and returned to the
  * buddy allocator on demand; membership is a table indexed by block number.
+ *
+ * Each block has a second mapping, the write alias, at a fixed distance from
+ * its direct-map address and tagged PKS_KEY_PAGE_CACHE_W.
  */
 #define PKS_BLOCK_ORDER		(PMD_SHIFT - PAGE_SHIFT)
 #define PKS_BLOCK_PAGES		(1UL << PKS_BLOCK_ORDER)
@@ -25,6 +28,7 @@ struct pks_block;
 DECLARE_STATIC_KEY_FALSE(pcache_pks_enabled);
 extern struct pks_block **pcache_pks_block_map;
 extern unsigned long pcache_pks_nr_blocks_max;
+extern unsigned long pcache_pks_alias_delta;
 
 /* Is the page-cache protection active on this boot? */
 static inline bool pcache_pks_is_enabled(void)
@@ -49,6 +53,22 @@ static inline bool pcache_pks_page(const struct page *page)
 	       READ_ONCE(pcache_pks_block_map[idx]) != NULL;
 }
 
+/*
+ * The address through which a write path stores into @page. @kaddr is a
+ * direct-map address inside @page, as kmap_local_page() returns it. For a
+ * protected page the result is the same byte in the write alias, which is the
+ * only mapping a write scope makes writable. For any other page it is @kaddr.
+ *
+ * Only code that writes file data on behalf of a write path may use this.
+ * Every call site is part of what the protection trusts.
+ */
+static inline void *pcache_pks_waddr(const struct page *page, void *kaddr)
+{
+	if (pcache_pks_page(page))
+		return kaddr + pcache_pks_alias_delta;
+	return kaddr;
+}
+
 #else /* !CONFIG_PCACHE_PKS */
 
 static inline bool pcache_pks_is_enabled(void)
@@ -58,6 +78,10 @@ static inline bool pcache_pks_is_enabled(void)
 static inline bool pcache_pks_page(const struct page *page)
 {
 	return false;
+}
+static inline void *pcache_pks_waddr(const struct page *page, void *kaddr)
+{
+	return kaddr;
 }
 
 #endif /* CONFIG_PCACHE_PKS */

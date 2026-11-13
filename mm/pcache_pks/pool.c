@@ -3,9 +3,10 @@
  * Protected page cache: the block pool.
  *
  * This file decides where protected pages come from and when their memory gets
- * its protection key. The pool takes 2 MiB (PMD) blocks from the buddy
+ * its protection keys. The pool takes 2 MiB (PMD) blocks from the buddy
  * allocator on demand, tags the direct-map leaf of each block with
- * PKS_KEY_PAGE_CACHE, and returns blocks under memory pressure.
+ * PKS_KEY_PAGE_CACHE, maps its write alias, and returns blocks under memory
+ * pressure.
  *
  * The pool is layered like slab: a per-CPU magazine of ascending-PFN pages in
  * front of a global list of blocks, each block tracking its free order-0 pages
@@ -99,6 +100,7 @@ static DEFINE_MUTEX(pks_tag_mutex);		/* serializes tag/untag batches */
 static struct {
 	struct pks_block	*blocks[PKS_GROW_MAX];
 	unsigned long		addrs[PKS_GROW_MAX];
+	unsigned long		flush[2 * PKS_GROW_MAX];
 	bool			stuck[PKS_GROW_MAX];
 } pks_batch;
 static DEFINE_PER_CPU(struct pks_magazine, pks_mags);
@@ -301,13 +303,55 @@ static gfp_t pks_block_gfp(gfp_t gfp)
 }
 
 /*
- * Tag the @n blocks of pks_batch: give each direct-map leaf PKS_KEY_PAGE_CACHE
- * and flush every CPU, so that no CPU can still write a block through a stale
- * translation once it is published. On failure every block is untagged again,
- * and pks_batch.stuck[] marks the ones whose key could not be removed.
+ * Flush the translations of the @n blocks of pks_batch on every CPU: the
+ * direct-map leaves, and with @alias the alias leaves as well.
+ */
+static void pks_flush_batch(unsigned int n, bool alias, bool flush_all)
+{
+	unsigned long *addrs = pks_batch.addrs;
+	unsigned long *flush = pks_batch.flush;
+	unsigned int i, nr = 0;
+
+	if (flush_all) {
+		flush_tlb_all();
+	} else {
+		for (i = 0; i < n; i++) {
+			flush[nr++] = addrs[i];
+			if (alias)
+				flush[nr++] = pks_alias_addr(addrs[i]);
+		}
+		flush_tlb_kernel_leaves(flush, nr);
+	}
+	pks_stat_inc(PKS_STAT_FLUSH);
+}
+
+/*
+ * Remove the alias and the key of every block of pks_batch. The caller
+ * flushes. pks_batch.stuck[] marks the blocks whose key could not be removed.
+ */
+static void pks_untag_noflush(unsigned int n, bool *need_flush_all)
+{
+	unsigned long *addrs = pks_batch.addrs;
+	unsigned int i;
+
+	for (i = 0; i < n; i++) {
+		pks_alias_unmap(addrs[i], PMD_SIZE, need_flush_all);
+		pks_batch.stuck[i] =
+			set_memory_pkey_noflush(addrs[i], PKS_BLOCK_PAGES, 0,
+						need_flush_all) != 0;
+	}
+}
+
+/*
+ * Tag the @n blocks of pks_batch: give each direct-map leaf PKS_KEY_PAGE_CACHE,
+ * map each write alias, and flush every CPU, so that no CPU can still write a
+ * block through a stale direct-map translation once it is published. On
+ * failure every block is untagged again, and pks_batch.stuck[] marks the ones
+ * whose key could not be removed.
  *
- * Runs under noreclaim: a page-table page allocated to split a 1 GiB leaf must
- * not recurse into fs reclaim or the shrinker while pks_tag_mutex is held.
+ * Runs under noreclaim: the page-table pages allocated to split a 1 GiB leaf
+ * or to map the alias must not recurse into fs reclaim or the shrinker while
+ * pks_tag_mutex is held.
  */
 static int pks_tag_batch(unsigned int n)
 {
@@ -325,46 +369,33 @@ static int pks_tag_batch(unsigned int n)
 		err = set_memory_pkey_noflush(addrs[i], PKS_BLOCK_PAGES,
 					      PKS_KEY_PAGE_CACHE,
 					      &need_flush_all);
+	for (i = 0; i < n && !err; i++)
+		err = pks_alias_map(addrs[i], PMD_SIZE);
 	if (err) {
 		/* Revert every block; one that was never tagged is a no-op. */
-		for (i = 0; i < n; i++)
-			pks_batch.stuck[i] =
-				set_memory_pkey_noflush(addrs[i], PKS_BLOCK_PAGES,
-							0, NULL) != 0;
-		need_flush_all = true;
+		pks_untag_noflush(n, &need_flush_all);
+		pks_flush_batch(n, true, need_flush_all);
+	} else {
+		pks_flush_batch(n, false, need_flush_all);
 	}
-	if (need_flush_all)
-		flush_tlb_all();
-	else
-		flush_tlb_kernel_leaves(addrs, n);
 	memalloc_noreclaim_restore(noreclaim);
-	pks_stat_inc(PKS_STAT_FLUSH);
 
 	return err;
 }
 
 /*
  * Untag the @n blocks of pks_batch and flush every CPU, so that the next owner
- * of this memory cannot take a key fault through a stale translation.
- * pks_batch.stuck[] marks the blocks whose key could not be removed.
+ * of this memory cannot take a key fault through a stale translation and
+ * nothing can reach it through the alias.
  */
 static void pks_untag_batch(unsigned int n)
 {
-	unsigned long *addrs = pks_batch.addrs;
 	bool need_flush_all = false;
-	unsigned int i;
 
 	lockdep_assert_held(&pks_tag_mutex);
 
-	for (i = 0; i < n; i++)
-		pks_batch.stuck[i] =
-			set_memory_pkey_noflush(addrs[i], PKS_BLOCK_PAGES, 0,
-						&need_flush_all) != 0;
-	if (need_flush_all)
-		flush_tlb_all();
-	else
-		flush_tlb_kernel_leaves(addrs, n);
-	pks_stat_inc(PKS_STAT_FLUSH);
+	pks_untag_noflush(n, &need_flush_all);
+	pks_flush_batch(n, true, need_flush_all);
 }
 
 /*
@@ -540,8 +571,11 @@ static struct page *pks_grow(gfp_t gfp)
 		goto out_unlock;
 	}
 
-	for (i = 0; i < n; i++)
+	for (i = 0; i < n; i++) {
 		pks_audit_range(addrs[i], PMD_SIZE, PKS_KEY_PAGE_CACHE);
+		pks_audit_range(pks_alias_addr(addrs[i]), PMD_SIZE,
+				PKS_KEY_PAGE_CACHE_W);
+	}
 
 	/* Publish only after every CPU has the tagged translation. */
 	spin_lock_irqsave(&pks_pool.lock, flags);

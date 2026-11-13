@@ -53,6 +53,18 @@ struct page *pks_pool_alloc(gfp_t gfp);
 void pks_pool_free(struct page *page);
 void pks_pool_info(struct pks_pool_info *info);
 
+/* alias.c: the second, writable mapping of protected memory */
+int pks_alias_init(void);
+int pks_alias_map(unsigned long addr, unsigned long size);
+void pks_alias_unmap(unsigned long addr, unsigned long size,
+		     bool *need_flush_all);
+
+/* The alias address of a direct-map address. */
+static inline unsigned long pks_alias_addr(unsigned long addr)
+{
+	return addr + pcache_pks_alias_delta;
+}
+
 static inline void pks_audit_range(unsigned long addr, unsigned long size,
 				   int pkey)
 {

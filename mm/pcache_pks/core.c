@@ -9,6 +9,7 @@
  *
  *   core.c	this file
  *   pool.c	placement: which memory is tagged, and when
+ *   alias.c	the second mapping, through which granted stores are made
  */
 #define pr_fmt(fmt) "pcache_pks: " fmt
 
@@ -146,7 +147,7 @@ static int __init pcache_pks_init(void)
 		return 0;
 	}
 
-	if (pks_pool_init())
+	if (pks_alias_init() || pks_pool_init())
 		return 0;
 
 	static_branch_enable(&pcache_pks_enabled);
