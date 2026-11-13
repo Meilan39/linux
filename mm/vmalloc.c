@@ -582,6 +582,18 @@ int vmap_pages_range_noflush(unsigned long addr, unsigned long end,
 
 	WARN_ON(page_shift < PAGE_SHIFT);
 
+	/*
+	 * A protected page has exactly two kernel mappings, the direct map and
+	 * the write alias, and both carry a key. vmap() and vm_map_ram() must
+	 * not give it a third, which would carry none.
+	 */
+	if (pcache_pks_is_enabled()) {
+		for (i = 0; i < nr; i++) {
+			if (unlikely(pcache_pks_page(pages[i])))
+				return -EPERM;
+		}
+	}
+
 	if (!IS_ENABLED(CONFIG_HAVE_ARCH_HUGE_VMALLOC) ||
 			page_shift == PAGE_SHIFT)
 		return vmap_small_pages_range_noflush(addr, end, prot, pages);
