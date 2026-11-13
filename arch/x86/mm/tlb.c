@@ -1090,6 +1090,35 @@ void flush_tlb_one_kernel(unsigned long addr)
 	this_cpu_write(cpu_tlbstate.invalidate_other, true);
 }
 
+struct kernel_leaves_flush_info {
+	const unsigned long *addrs;
+	unsigned int nr;
+};
+
+static void do_kernel_leaves_flush(void *info)
+{
+	const struct kernel_leaves_flush_info *f = info;
+	unsigned int i;
+
+	for (i = 0; i < f->nr; i++)
+		flush_tlb_one_kernel(f->addrs[i]);
+}
+
+/*
+ * Invalidate one translation per entry of @addrs on every CPU with a single
+ * IPI. Each address is the base of a kernel leaf (e.g. a 2 MiB direct-map PMD),
+ * so one invlpg per leaf suffices and CR4.PGE is left untouched -- unlike
+ * flush_tlb_kernel_range(), whose >33-page ranges escalate to a full flush.
+ */
+void flush_tlb_kernel_leaves(const unsigned long *addrs, unsigned int nr)
+{
+	struct kernel_leaves_flush_info info = { .addrs = addrs, .nr = nr };
+
+	if (!nr)
+		return;
+	on_each_cpu(do_kernel_leaves_flush, &info, 1);
+}
+
 /*
  * Flush one page in the user mapping
  */
