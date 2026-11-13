@@ -24,6 +24,7 @@
 #include <linux/time.h>
 #include <linux/highuid.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks.h>
 #include <linux/dax.h>
 #include <linux/quotaops.h>
 #include <linux/string.h>
@@ -6042,6 +6043,7 @@ vm_fault_t ext4_page_mkwrite(struct vm_fault *vmf)
 	struct file *file = vma->vm_file;
 	struct inode *inode = file_inode(file);
 	struct address_space *mapping = inode->i_mapping;
+	struct pcache_pks_scope pks_scope;
 	handle_t *handle;
 	get_block_t *get_block;
 	int retries = 0;
@@ -6053,6 +6055,15 @@ vm_fault_t ext4_page_mkwrite(struct vm_fault *vmf)
 	file_update_time(vma->vm_file);
 
 	filemap_invalidate_lock_shared(mapping);
+
+	/*
+	 * Making a page of a shared mapping writable allocates its blocks, and
+	 * block_page_mkwrite() zeroes the ones that are new. The task's own
+	 * stores then go through its user mapping, which has no key.
+	 */
+	err = pcache_pks_scope_begin_file(&pks_scope, PKS_SITE_MKWRITE, file);
+	if (err)
+		goto out_ret;
 
 	err = ext4_convert_inline_data(inode);
 	if (err)
@@ -6167,6 +6178,7 @@ retry_alloc:
 out_ret:
 	ret = block_page_mkwrite_return(err);
 out:
+	pcache_pks_scope_end(&pks_scope);
 	filemap_invalidate_unlock_shared(mapping);
 	sb_end_pagefault(inode->i_sb);
 	return ret;

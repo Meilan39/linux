@@ -43,6 +43,7 @@
 #include <linux/writeback.h>
 #include <linux/backing-dev.h>
 #include <linux/pagevec.h>
+#include <linux/pcache_pks.h>
 
 #include "ext4.h"
 
@@ -240,6 +241,7 @@ int ext4_mpage_readpages(struct inode *inode,
 	unsigned relative_block = 0;
 	struct ext4_map_blocks map;
 	unsigned int nr_pages = rac ? readahead_count(rac) : 1;
+	struct pcache_pks_scope pks_scope;
 
 	map.m_pblk = 0;
 	map.m_lblk = 0;
@@ -303,8 +305,11 @@ int ext4_mpage_readpages(struct inode *inode,
 				if (ext4_map_blocks(NULL, inode, &map, 0) < 0) {
 				set_error_page:
 					SetPageError(page);
+					pcache_pks_scope_begin_fill(&pks_scope,
+						PKS_SITE_READ_ZERO, page);
 					zero_user_segment(page, 0,
 							  PAGE_SIZE);
+					pcache_pks_scope_end(&pks_scope);
 					unlock_page(page);
 					goto next_page;
 				}
@@ -336,8 +341,12 @@ int ext4_mpage_readpages(struct inode *inode,
 			}
 		}
 		if (first_hole != blocks_per_page) {
+			/* A hole is filled with zeroes by the CPU. */
+			pcache_pks_scope_begin_fill(&pks_scope,
+						    PKS_SITE_READ_ZERO, page);
 			zero_user_segment(page, first_hole << blkbits,
 					  PAGE_SIZE);
+			pcache_pks_scope_end(&pks_scope);
 			if (first_hole == 0) {
 				if (ext4_need_verity(inode, page->index) &&
 				    !fsverity_verify_page(page))
@@ -393,10 +402,15 @@ int ext4_mpage_readpages(struct inode *inode,
 			submit_bio(bio);
 			bio = NULL;
 		}
-		if (!PageUptodate(page))
+		if (!PageUptodate(page)) {
+			/* block_read_full_page() zeroes the holes it finds. */
+			pcache_pks_scope_begin_fill(&pks_scope,
+						    PKS_SITE_READ_ZERO, page);
 			block_read_full_page(page, ext4_get_block);
-		else
+			pcache_pks_scope_end(&pks_scope);
+		} else {
 			unlock_page(page);
+		}
 	next_page:
 		if (rac)
 			put_page(page);
