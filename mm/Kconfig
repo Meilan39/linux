@@ -797,6 +797,34 @@ config ZONE_DEVICE
 
 	  If FS_DAX is enabled, then say Y.
 
+config PCACHE_PKS
+	bool "Write-protect the page cache of selected files with PKS (EXPERIMENTAL)"
+	depends on X86_64 && ARCH_HAS_SUPERVISOR_PKEYS
+	depends on !HIBERNATION
+	depends on !READ_ONLY_THP_FOR_FS
+	depends on !KASAN
+	select ARCH_ENABLE_PKS_CONSUMER
+	help
+	  Keep the page cache of selected mappings in memory whose kernel
+	  mapping carries a supervisor protection key (PKS). The key is
+	  write-disabled, so a kernel store into such a page faults unless
+	  it comes from a write path that was granted access.
+
+	  The memory comes from a pool of 2 MiB blocks. The pool takes blocks
+	  from the buddy allocator on demand, returns them under memory
+	  pressure, and reserves nothing at boot.
+
+	  The protection is active only when the kernel is booted with
+	  pcache_pks=on. /sys/kernel/mm/pcache_pks/ then reports the pool's
+	  size and event counters.
+
+	  Incompatible with hibernation (the image is saved through the
+	  direct map), with read-only THP for filesystems (khugepaged copies
+	  into page-cache pages), and with KASAN (it poisons freed pages
+	  through the direct map).
+
+	  If unsure, say N.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN
