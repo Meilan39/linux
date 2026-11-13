@@ -635,8 +635,12 @@ static struct page *pks_alloc_block(gfp_t gfp)
  * caller, or NULL if no block could be obtained. Handing the grower its page
  * before the rest are published means a growth can never be lost to other
  * writers, so a NULL return always means memory, not contention.
+ *
+ * Without @force, nothing is grown if another grower has published blocks in
+ * the meantime. A reservation passes @force, because it grows a pool that has
+ * free pages.
  */
-static struct page *pks_grow(gfp_t gfp)
+static struct page *pks_grow(gfp_t gfp, bool force)
 {
 	struct pks_block **blocks = pks_batch.blocks;
 	unsigned long *addrs = pks_batch.addrs;
@@ -655,7 +659,8 @@ static struct page *pks_grow(gfp_t gfp)
 	 */
 	nofs = memalloc_nofs_save();
 	/* Another grower may have published blocks while we waited. */
-	page = pks_take_one();
+	if (!force)
+		page = pks_take_one();
 	if (page)
 		goto out_unlock;
 
@@ -1036,7 +1041,9 @@ static struct page *pks_alloc_slow(gfp_t gfp)
 
 	pcache_pks_scope_clamp(&scope);
 	for (tries = 0; tries < PKS_GROW_TRIES && !page; tries++) {
-		page = pks_grow(gfp);
+		/* A static reservation never grows. */
+		if (!pks_static)
+			page = pks_grow(gfp, false);
 		if (!page && READ_ONCE(pks_pool.nr_blocks))
 			page = pks_reclaim_inpool(gfp);
 	}
@@ -1044,7 +1051,10 @@ static struct page *pks_alloc_slow(gfp_t gfp)
 	return page;
 }
 
-/* Allocate one tagged page. Its content is whatever its last user left. */
+/*
+ * Allocate one tagged page, ready for use as alloc_pages() would return it.
+ * Its content is whatever its last user left.
+ */
 struct page *pks_pool_alloc(gfp_t gfp)
 {
 	struct pks_magazine *m;
@@ -1061,6 +1071,8 @@ struct page *pks_pool_alloc(gfp_t gfp)
 	if (!page && gfpflags_allow_blocking(gfp) &&
 	    !(current->flags & PF_MEMALLOC))
 		page = pks_alloc_slow(gfp);
+	if (page)
+		post_alloc_hook(page, 0, gfp);
 	return page;
 }
 
@@ -1108,7 +1120,8 @@ static unsigned long pks_shrink_count(struct shrinker *s,
 {
 	unsigned long blocks, empty, reserve, stranded, n = 0;
 
-	if (!pcache_pks_is_enabled())
+	/* A static reservation is never given back. */
+	if (!pcache_pks_is_enabled() || pks_static)
 		return 0;
 	blocks = READ_ONCE(pks_pool.nr_blocks);
 	if (!blocks)
@@ -1132,7 +1145,8 @@ static unsigned long pks_shrink_scan(struct shrinker *s,
 	unsigned long reserve, freed;
 	unsigned int noreclaim;
 
-	if (!pcache_pks_is_enabled() || !READ_ONCE(pks_pool.nr_blocks))
+	if (!pcache_pks_is_enabled() || pks_static ||
+	    !READ_ONCE(pks_pool.nr_blocks))
 		return SHRINK_STOP;
 
 	/* Some reclaim callers, such as __node_reclaim(), do not clamp. */
@@ -1205,7 +1219,9 @@ void pks_pool_info(struct pks_pool_info *info)
 {
 	unsigned long flags, r;
 
+	info->pending_pages = 0;
 	spin_lock_irqsave(&pks_pool.lock, flags);
+	info->tagged_pages = pks_pool.nr_blocks * PKS_BLOCK_PAGES;
 	info->blocks = pks_pool.nr_blocks;
 	info->empty_blocks = pks_pool.nr_empty;
 	info->free_pages = pks_pool.nr_free_pages;
@@ -1219,6 +1235,55 @@ void pks_pool_info(struct pks_pool_info *info)
 		info->regions_occupied += !!READ_ONCE(pks_regions[r].nr_blocks);
 	}
 }
+
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+/*
+ * Static placement, an evaluation baseline: the pool is filled to a fixed size
+ * at boot and then neither grows nor shrinks. Everything else is the code of
+ * the dynamic pool, so a comparison shows what growing on demand costs and
+ * what it saves.
+ */
+bool pks_static __ro_after_init;
+static unsigned long pks_reserve_bytes __initdata;
+
+static int __init setup_pcache_pks_reserve(char *str)
+{
+	if (!str)
+		return -EINVAL;
+	pks_reserve_bytes = memparse(str, NULL);
+	return 0;
+}
+early_param("pcache_pks.reserve", setup_pcache_pks_reserve);
+
+int __init pks_pool_reserve(void)
+{
+	unsigned long want = pks_reserve_bytes >> PMD_SHIFT;
+	unsigned long flags;
+	struct page *page;
+
+	if (!want) {
+		pr_err("pcache_pks.placement=static needs pcache_pks.reserve=<size>\n");
+		return -EINVAL;
+	}
+	while (READ_ONCE(pks_pool.nr_blocks) < want) {
+		page = pks_grow(GFP_KERNEL | __GFP_NOWARN, true);
+		if (!page)
+			break;
+		/* pks_grow() hands its caller one page; put it back. */
+		spin_lock_irqsave(&pks_pool.lock, flags);
+		pks_return_one(page);
+		spin_unlock_irqrestore(&pks_pool.lock, flags);
+		mod_node_page_state(NODE_DATA(first_online_node),
+				    NR_KERNEL_MISC_RECLAIMABLE, 1);
+		cond_resched();
+	}
+	pks_static = true;
+	pr_info("static reservation: %lu of %lu MiB\n",
+		READ_ONCE(pks_pool.nr_blocks) << (PMD_SHIFT - 20),
+		want << (PMD_SHIFT - 20));
+	return READ_ONCE(pks_pool.nr_blocks) ? 0 : -ENOMEM;
+}
+#endif /* CONFIG_PCACHE_PKS_BASELINES */
 
 /*
  * Note the regions that are not mapped by one 1 GiB leaf at boot. Using them

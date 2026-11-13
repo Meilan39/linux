@@ -52,6 +52,8 @@ unsigned long pks_stat_read(enum pks_stat_item item);
  * pool.c is the implementation.
  */
 struct pks_pool_info {
+	unsigned long tagged_pages;	/* pages that carry the key now */
+	unsigned long pending_pages;	/* freed pages waiting to be untagged */
 	unsigned long blocks;
 	unsigned long empty_blocks;
 	unsigned long free_pages;
@@ -63,6 +65,31 @@ int pks_pool_init(void);
 struct page *pks_pool_alloc(gfp_t gfp);
 void pks_pool_free(struct page *page);
 void pks_pool_info(struct pks_pool_info *info);
+
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+/*
+ * For the evaluation, the placement is chosen at boot. Every placement
+ * implements these: alloc() returns a page that is tagged, flushed, published
+ * and ready for use as alloc_pages() would return it; free() takes a page of
+ * the placement back in any context.
+ */
+struct pks_placement {
+	const char *name;
+	struct page *(*alloc)(gfp_t gfp);
+	void (*free)(struct page *page);
+	void (*info)(struct pks_pool_info *info);
+};
+
+extern const struct pks_placement pks_naive_placement;
+extern bool pks_static;
+int pks_pool_reserve(void);
+int pks_naive_init(void);
+#else
+#define pks_static false
+#endif
+
+/* core.c: the state of whichever placement is in use */
+void pcache_pks_info(struct pks_pool_info *info);
 
 /* debug.c */
 #ifdef CONFIG_PCACHE_PKS_DEBUG

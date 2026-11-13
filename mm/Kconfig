@@ -831,6 +831,25 @@ config PCACHE_PKS
 
 	  If unsure, say N.
 
+config PCACHE_PKS_BASELINES
+	bool "Baseline placements for evaluating the PKS page-cache protection"
+	depends on PCACHE_PKS
+	help
+	  Build two more ways to place protected pages, for comparison with
+	  the dynamic block pool, and select one at boot with
+	  pcache_pks.placement=:
+
+	    static  the block pool, filled to pcache_pks.reserve=<size> at
+	            boot and then neither grown nor shrunk
+	    naive   no pool: every page is tagged when it enters the page
+	            cache and untagged after it leaves
+
+	  The scopes, the write alias, the fault handler and the admission
+	  rules are the same code for all three. This option exists to measure
+	  the dynamic pool against the alternatives; it is not meant for use.
+
+	  If unsure, say N.
+
 config PCACHE_PKS_DEBUG
 	bool "Debugging of the PKS page-cache protection"
 	depends on PCACHE_PKS && DEBUG_FS

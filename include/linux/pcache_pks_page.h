@@ -30,6 +30,12 @@ extern struct pks_block **pcache_pks_block_map;
 extern unsigned long pcache_pks_nr_blocks_max;
 extern unsigned long pcache_pks_alias_delta;
 
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+/* The per-page baseline keeps its membership in a bitmap of page frames. */
+DECLARE_STATIC_KEY_FALSE(pcache_pks_per_page);
+extern unsigned long *pcache_pks_page_map;
+#endif
+
 /* Is the page-cache protection active on this boot? */
 static inline bool pcache_pks_is_enabled(void)
 {
@@ -49,6 +55,11 @@ static inline bool pcache_pks_page(const struct page *page)
 	if (!pcache_pks_is_enabled())
 		return false;
 	idx = page_to_pfn(page) >> PKS_BLOCK_ORDER;
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	if (static_branch_unlikely(&pcache_pks_per_page))
+		return idx < pcache_pks_nr_blocks_max &&
+		       test_bit(page_to_pfn(page), pcache_pks_page_map);
+#endif
 	return idx < pcache_pks_nr_blocks_max &&
 	       READ_ONCE(pcache_pks_block_map[idx]) != NULL;
 }

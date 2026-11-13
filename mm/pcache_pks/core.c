@@ -23,6 +23,8 @@
 #include <linux/mm.h>
 #include <linux/pks.h>
 #include <linux/printk.h>
+#include <linux/static_call.h>
+#include <linux/string.h>
 #include <linux/sysfs.h>
 #include "../internal.h"
 #include "internal.h"
@@ -39,6 +41,86 @@ static int __init setup_pcache_pks(char *str)
 	return kstrtobool(str, &pcache_pks_param);
 }
 early_param("pcache_pks", setup_pcache_pks);
+
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+/*
+ * Evaluation only: pcache_pks.placement= chooses where protected pages come
+ * from. "dynamic" is the block pool and the default, "static" is the block
+ * pool filled to pcache_pks.reserve= at boot and then fixed, "naive" tags
+ * every page on its own. The calls are patched at boot, so the placement that
+ * is not chosen costs nothing.
+ */
+static const struct pks_placement pks_dynamic_placement = {
+	.name	= "dynamic",
+	.alloc	= pks_pool_alloc,
+	.free	= pks_pool_free,
+	.info	= pks_pool_info,
+};
+
+static const struct pks_placement pks_static_placement = {
+	.name	= "static",
+	.alloc	= pks_pool_alloc,
+	.free	= pks_pool_free,
+	.info	= pks_pool_info,
+};
+
+static const struct pks_placement *pks_placement __ro_after_init =
+	&pks_dynamic_placement;
+
+DEFINE_STATIC_CALL(pks_place_alloc, pks_pool_alloc);
+DEFINE_STATIC_CALL(pks_place_free, pks_pool_free);
+DEFINE_STATIC_CALL(pks_place_info, pks_pool_info);
+
+static int __init setup_pcache_pks_placement(char *str)
+{
+	if (!str)
+		return -EINVAL;
+	if (!strcmp(str, "dynamic"))
+		pks_placement = &pks_dynamic_placement;
+	else if (!strcmp(str, "static"))
+		pks_placement = &pks_static_placement;
+	else if (!strcmp(str, "naive"))
+		pks_placement = &pks_naive_placement;
+	else
+		return -EINVAL;
+	return 0;
+}
+early_param("pcache_pks.placement", setup_pcache_pks_placement);
+
+static int __init pks_place_init(void)
+{
+	int err;
+
+	if (pks_placement == &pks_naive_placement)
+		err = pks_naive_init();
+	else if (pks_placement == &pks_static_placement)
+		err = pks_pool_init() ?: pks_pool_reserve();
+	else
+		err = pks_pool_init();
+	if (err)
+		return err;
+	static_call_update(pks_place_alloc, pks_placement->alloc);
+	static_call_update(pks_place_free, pks_placement->free);
+	static_call_update(pks_place_info, pks_placement->info);
+	return 0;
+}
+
+#define pks_place_alloc(gfp)	static_call(pks_place_alloc)(gfp)
+#define pks_place_free(page)	static_call(pks_place_free)(page)
+#define pks_place_info(info)	static_call(pks_place_info)(info)
+#define pks_place_name()	(pks_placement->name)
+#else
+#define pks_place_init()	pks_pool_init()
+#define pks_place_alloc(gfp)	pks_pool_alloc(gfp)
+#define pks_place_free(page)	pks_pool_free(page)
+#define pks_place_info(info)	pks_pool_info(info)
+#define pks_place_name()	"dynamic"
+#endif
+
+void pcache_pks_info(struct pks_pool_info *info)
+{
+	pks_place_info(info);
+}
 
 unsigned long pks_stat_read(enum pks_stat_item item)
 {
@@ -62,14 +144,12 @@ struct folio *pcache_pks_alloc_folio(gfp_t gfp, unsigned int order)
 	if (WARN_ON_ONCE(order) || (gfp & __GFP_ZERO))
 		return NULL;
 
-	page = pks_pool_alloc(gfp);
+	page = pks_place_alloc(gfp);
 	if (!page) {
 		if (!(gfp & __GFP_NOWARN))
 			pr_warn_ratelimited("pool exhausted\n");
 		return NULL;
 	}
-
-	post_alloc_hook(page, 0, gfp);
 	return page_folio(page);
 }
 EXPORT_SYMBOL_GPL(pcache_pks_alloc_folio);
@@ -77,7 +157,7 @@ EXPORT_SYMBOL_GPL(pcache_pks_alloc_folio);
 /* The page allocator's free path hands every protected page back here. */
 void pcache_pks_recycle_page(struct page *page)
 {
-	pks_pool_free(page);
+	pks_place_free(page);
 }
 
 #define PKS_STAT_ATTR(_name, _item)					\
@@ -113,23 +193,41 @@ static ssize_t tagged_kb_show(struct kobject *kobj,
 {
 	struct pks_pool_info info;
 
-	pks_pool_info(&info);
-	return sysfs_emit(buf, "%lu\n",
-			  info.blocks << (PKS_BLOCK_ORDER + PAGE_SHIFT - 10));
+	pks_place_info(&info);
+	return sysfs_emit(buf, "%lu\n", info.tagged_pages << (PAGE_SHIFT - 10));
 }
 static struct kobj_attribute tagged_kb_attr = __ATTR_RO(tagged_kb);
+
+static ssize_t untag_pending_show(struct kobject *kobj,
+				  struct kobj_attribute *attr, char *buf)
+{
+	struct pks_pool_info info;
+
+	pks_place_info(&info);
+	return sysfs_emit(buf, "%lu\n", info.pending_pages);
+}
+static struct kobj_attribute untag_pending_attr = __ATTR_RO(untag_pending);
+
+static ssize_t placement_show(struct kobject *kobj,
+			      struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%s\n", pks_place_name());
+}
+static struct kobj_attribute placement_attr = __ATTR_RO(placement);
 
 static ssize_t free_kb_show(struct kobject *kobj,
 			    struct kobj_attribute *attr, char *buf)
 {
 	struct pks_pool_info info;
 
-	pks_pool_info(&info);
+	pks_place_info(&info);
 	return sysfs_emit(buf, "%lu\n", info.free_pages << (PAGE_SHIFT - 10));
 }
 static struct kobj_attribute free_kb_attr = __ATTR_RO(free_kb);
 
 static struct attribute *pcache_pks_attrs[] = {
+	&placement_attr.attr,
+	&untag_pending_attr.attr,
 	&tagged_kb_attr.attr,
 	&free_kb_attr.attr,
 	&tag_ops_attr.attr,
@@ -171,14 +269,14 @@ static int __init pcache_pks_init(void)
 		return 0;
 	}
 
-	if (pks_alias_init() || pks_pool_init())
+	if (pks_alias_init() || pks_place_init())
 		return 0;
 
 	static_branch_enable(&pcache_pks_enabled);
 	pcache_pks_sysfs_init();
 	pks_debug_init();
-	pr_info("page-cache protection enabled (%lu-entry block map)\n",
-		pcache_pks_nr_blocks_max);
+	pr_info("page-cache protection enabled (%s placement, %lu-entry block map)\n",
+		pks_place_name(), pcache_pks_nr_blocks_max);
 	return 0;
 }
 subsys_initcall(pcache_pks_init);

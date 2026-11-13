@@ -97,7 +97,7 @@ static int pks_status_show(struct seq_file *m, void *v)
 	unsigned int cpu;
 	int i;
 
-	pks_pool_info(&info);
+	pcache_pks_info(&info);
 	for (i = 0; i < PKS_NR_SITES; i++)
 		scopes += pks_scope_count(i);
 
@@ -105,8 +105,8 @@ static int pks_status_show(struct seq_file *m, void *v)
 	seq_printf(m, "block_map_entries:   %lu\n", pcache_pks_nr_blocks_max);
 	seq_printf(m, "pool_blocks:         %lu\n", info.blocks);
 	seq_printf(m, "pool_empty_blocks:   %lu\n", info.empty_blocks);
-	seq_printf(m, "pool_pages:          %lu\n",
-		   info.blocks * PKS_BLOCK_PAGES);
+	seq_printf(m, "pool_pages:          %lu\n", info.tagged_pages);
+	seq_printf(m, "untag_pending:       %lu\n", info.pending_pages);
 	seq_printf(m, "pool_free_pages:     %lu\n", info.free_pages);
 	seq_printf(m, "scope_count:         %lu\n", scopes);
 	seq_printf(m, "refused_grants:      %lu\n",
