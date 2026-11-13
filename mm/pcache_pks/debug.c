@@ -117,6 +117,10 @@ static int pks_status_show(struct seq_file *m, void *v)
 		   pks_stat_read(PKS_STAT_TAG));
 	seq_printf(m, "release_blocks:      %lu\n",
 		   pks_stat_read(PKS_STAT_UNTAG));
+	seq_printf(m, "grow_affine_blocks:  %lu\n",
+		   pks_stat_read(PKS_STAT_GROW_AFFINE));
+	seq_printf(m, "regions_split:       %lu\n", info.regions_split);
+	seq_printf(m, "regions_occupied:    %lu\n", info.regions_occupied);
 	seq_printf(m, "tlb_flushes:         %lu\n",
 		   pks_stat_read(PKS_STAT_FLUSH));
 	seq_printf(m, "grow_failures:       %lu\n",

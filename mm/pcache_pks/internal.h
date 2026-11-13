@@ -12,6 +12,7 @@
 enum pks_stat_item {
 	PKS_STAT_TAG,		/* blocks tagged */
 	PKS_STAT_UNTAG,		/* blocks untagged */
+	PKS_STAT_GROW_AFFINE,	/* blocks taken from a region already split */
 	PKS_STAT_FLUSH,		/* TLB flush rounds sent for tagging */
 	PKS_STAT_GROW_FAIL,	/* growth attempts that got no block */
 	PKS_STAT_INPOOL,	/* allocations served by in-pool reclaim */
@@ -54,6 +55,8 @@ struct pks_pool_info {
 	unsigned long blocks;
 	unsigned long empty_blocks;
 	unsigned long free_pages;
+	unsigned long regions_split;	/* 1 GiB regions known to be split */
+	unsigned long regions_occupied;	/* 1 GiB regions holding a block now */
 };
 
 int pks_pool_init(void);

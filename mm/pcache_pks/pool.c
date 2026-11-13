@@ -303,6 +303,145 @@ static gfp_t pks_block_gfp(gfp_t gfp)
 }
 
 /*
+ * Region affinity
+ * ---------------
+ * Tagging one 2 MiB block inside a 1 GiB direct-map leaf splits that leaf into
+ * 512 entries, and nothing in this kernel merges them again. If growth takes
+ * its blocks wherever the buddy allocator has one, the pool ends up having
+ * split several times as much of the direct map as it ever held.
+ *
+ * A leaf that is already split costs nothing more to use. So growth first
+ * looks for a free 2 MiB chunk inside a 1 GiB region that is split, because the
+ * pool tagged a block there before or because the region was never mapped by
+ * one leaf, and takes it straight off the buddy free list. Only when there is
+ * none does it ask alloc_pages(), which may open a new region. This changes
+ * where a block comes from, never whether growth succeeds.
+ */
+#define PKS_REGION_SHIFT	(PUD_SHIFT - PAGE_SHIFT)
+#define PKS_REGION_PAGES	(1UL << PKS_REGION_SHIFT)
+
+struct pks_region {
+	unsigned long	scanned;	/* jiffies of the last scan that failed */
+	u16		nr_blocks;	/* pool blocks in the region now */
+	bool		split;		/* its 1 GiB leaf is known to be split */
+	bool		full;		/* that scan found no free chunk */
+};
+
+/* All of this is protected by pks_tag_mutex. */
+static struct pks_region *pks_regions;
+static unsigned long pks_nr_regions;
+static unsigned long pks_claim_cursor;	/* pfn after the last chunk claimed */
+static bool pks_affine __ro_after_init = true;
+
+static int __init setup_pcache_pks_affine(char *str)
+{
+	return kstrtobool(str, &pks_affine);
+}
+early_param("pcache_pks.affine", setup_pcache_pks_affine);
+
+static inline struct pks_region *pks_region_of(unsigned long pfn)
+{
+	return &pks_regions[pfn >> PKS_REGION_SHIFT];
+}
+
+/*
+ * Take one free 2 MiB chunk of region @r off the buddy free list, or return
+ * NULL. Like an allocation, this respects the zone's minimum watermark; unlike
+ * one, it never reclaims or compacts. The page comes back as alloc_pages()
+ * would return it: reference count 1, owner recorded, zeroed if @gfp says so.
+ */
+static struct page *pks_claim_in_region(unsigned long r, gfp_t gfp)
+{
+	unsigned long pfn = r << PKS_REGION_SHIFT;
+	unsigned long end = pfn + PKS_REGION_PAGES;
+
+	if (pks_claim_cursor > pfn && pks_claim_cursor < end)
+		pfn = pks_claim_cursor;
+
+	for (; pfn < end; pfn += pageblock_nr_pages) {
+		struct page *page = pfn_to_online_page(pfn);
+		unsigned long flags;
+		unsigned int order;
+		struct zone *zone;
+
+		/* An unlocked hint, checked again under the zone lock. */
+		if (!page || !PageBuddy(page) ||
+		    buddy_order_unsafe(page) < PKS_BLOCK_ORDER)
+			continue;
+		/* The same memory alloc_pages(__GFP_MOVABLE) would use. */
+		zone = page_zone(page);
+		if (zone_idx(zone) != ZONE_NORMAL && zone_idx(zone) != ZONE_DMA32)
+			continue;
+		if (get_pageblock_migratetype(page) != MIGRATE_MOVABLE)
+			continue;
+
+		/*
+		 * Under the lock: the chunk is still free, its pageblock is
+		 * still movable (not isolated in the meantime, and not CMA),
+		 * and taking it leaves the zone what an allocation for
+		 * ZONE_NORMAL would leave it, the reserve that a lower zone
+		 * keeps for its own users included. __isolate_free_page()
+		 * checks the minimum watermark without that reserve.
+		 */
+		spin_lock_irqsave(&zone->lock, flags);
+		order = PageBuddy(page) ? buddy_order(page) : 0;
+		if (order < PKS_BLOCK_ORDER ||
+		    get_pageblock_migratetype(page) != MIGRATE_MOVABLE ||
+		    !zone_watermark_ok(zone, 0,
+				       min_wmark_pages(zone) + (1UL << order),
+				       ZONE_NORMAL, 0) ||
+		    !__isolate_free_page(page, order)) {
+			spin_unlock_irqrestore(&zone->lock, flags);
+			continue;
+		}
+		/* Of a 4 MiB chunk, give the upper half straight back. */
+		if (order > PKS_BLOCK_ORDER)
+			__putback_isolated_page(page + PKS_BLOCK_PAGES,
+						PKS_BLOCK_ORDER,
+						MIGRATE_MOVABLE);
+		spin_unlock_irqrestore(&zone->lock, flags);
+
+		post_alloc_hook(page, PKS_BLOCK_ORDER, gfp);
+		pks_claim_cursor = pfn + pageblock_nr_pages;
+		return page;
+	}
+	return NULL;
+}
+
+/* Find a block in a region that is already split: occupied regions first. */
+static struct page *pks_claim_affine(gfp_t gfp)
+{
+	unsigned long r;
+	int pass;
+
+	lockdep_assert_held(&pks_tag_mutex);
+
+	for (pass = 0; pass < 2; pass++) {
+		for (r = 0; r < pks_nr_regions; r++) {
+			struct pks_region *reg = &pks_regions[r];
+			bool occupied = reg->nr_blocks;
+			struct page *page;
+
+			/* Pass 0 takes the occupied regions, pass 1 the rest. */
+			if (!reg->split || occupied == (pass == 1))
+				continue;
+			/* Do not scan a region that had nothing a moment ago. */
+			if (reg->full && time_before(jiffies, reg->scanned + HZ))
+				continue;
+			page = pks_claim_in_region(r, gfp);
+			if (page) {
+				reg->full = false;
+				return page;
+			}
+			reg->full = true;
+			reg->scanned = jiffies;
+			pks_claim_cursor = 0;
+		}
+	}
+	return NULL;
+}
+
+/*
  * Flush the translations of the @n blocks of pks_batch on every CPU: the
  * direct-map leaves, and with @alias the alias leaves as well.
  */
@@ -418,6 +557,9 @@ static void pks_release_blocks(struct pks_block **batch, unsigned int n)
 		WARN_ON_ONCE(b->nr_free != PKS_BLOCK_PAGES);
 		addrs[i] = (unsigned long)__va(PFN_PHYS(b->base_pfn));
 		WRITE_ONCE(pcache_pks_block_map[idx], NULL);
+		/* The region gets a free chunk back: worth scanning again. */
+		pks_region_of(b->base_pfn)->nr_blocks--;
+		pks_region_of(b->base_pfn)->full = false;
 	}
 	pks_untag_batch(n);
 
@@ -459,10 +601,22 @@ static unsigned long pks_stranded_pages(void)
 	return free > in_empty ? free - in_empty : 0;
 }
 
-/* Get one 2 MiB block from the buddy allocator. */
+/*
+ * Get one 2 MiB block: from a region that is already split if one has a free
+ * chunk, otherwise from wherever the buddy allocator finds one.
+ */
 static struct page *pks_alloc_block(gfp_t gfp)
 {
-	struct page *page = alloc_pages(gfp, PKS_BLOCK_ORDER);
+	struct page *page;
+
+	if (pks_affine) {
+		page = pks_claim_affine(gfp);
+		if (page) {
+			pks_stat_inc(PKS_STAT_GROW_AFFINE);
+			return page;
+		}
+	}
+	page = alloc_pages(gfp, PKS_BLOCK_ORDER);
 
 	/*
 	 * A movable allocation may be served from a CMA area. A pool block
@@ -589,6 +743,8 @@ static struct page *pks_grow(gfp_t gfp)
 		 */
 		smp_store_release(&pcache_pks_block_map[b->base_pfn >>
 							PKS_BLOCK_ORDER], b);
+		pks_region_of(b->base_pfn)->nr_blocks++;
+		pks_region_of(b->base_pfn)->split = true;
 		pks_pool.nr_blocks++;
 		pks_pool.nr_free_pages += PKS_BLOCK_PAGES;
 		pks_set_list(b, PKS_LIST_EMPTY);
@@ -1047,13 +1203,40 @@ void pks_pool_show_blocks(struct seq_file *m)
 
 void pks_pool_info(struct pks_pool_info *info)
 {
-	unsigned long flags;
+	unsigned long flags, r;
 
 	spin_lock_irqsave(&pks_pool.lock, flags);
 	info->blocks = pks_pool.nr_blocks;
 	info->empty_blocks = pks_pool.nr_empty;
 	info->free_pages = pks_pool.nr_free_pages;
 	spin_unlock_irqrestore(&pks_pool.lock, flags);
+
+	/* Unlocked: these two are for reports only. */
+	info->regions_split = 0;
+	info->regions_occupied = 0;
+	for (r = 0; r < pks_nr_regions; r++) {
+		info->regions_split += READ_ONCE(pks_regions[r].split);
+		info->regions_occupied += !!READ_ONCE(pks_regions[r].nr_blocks);
+	}
+}
+
+/*
+ * Note the regions that are not mapped by one 1 GiB leaf at boot. Using them
+ * splits nothing.
+ */
+static void __init pks_regions_init(void)
+{
+	unsigned long r;
+
+	for (r = 0; r < pks_nr_regions; r++) {
+		unsigned long pfn = r << PKS_REGION_SHIFT;
+		unsigned int level;
+
+		if (pfn_valid(pfn) &&
+		    lookup_address((unsigned long)pfn_to_kaddr(pfn), &level) &&
+		    level != PG_LEVEL_1G)
+			pks_regions[r].split = true;
+	}
 }
 
 int __init pks_pool_init(void)
@@ -1068,6 +1251,15 @@ int __init pks_pool_init(void)
 	if (!pcache_pks_block_map)
 		return -ENOMEM;
 	pcache_pks_nr_blocks_max = nr;
+
+	pks_nr_regions = (max_pfn + PKS_REGION_PAGES - 1) >> PKS_REGION_SHIFT;
+	pks_regions = kvcalloc(pks_nr_regions, sizeof(*pks_regions),
+			       GFP_KERNEL);
+	if (!pks_regions) {
+		ret = -ENOMEM;
+		goto err_free;
+	}
+	pks_regions_init();
 
 	for_each_possible_cpu(cpu)
 		INIT_WORK(&per_cpu_ptr(&pks_mags, cpu)->drain_work,
@@ -1088,6 +1280,9 @@ int __init pks_pool_init(void)
 	return 0;
 
 err_free:
+	kvfree(pks_regions);
+	pks_regions = NULL;
+	pks_nr_regions = 0;
 	kvfree(pcache_pks_block_map);
 	pcache_pks_block_map = NULL;
 	pcache_pks_nr_blocks_max = 0;
