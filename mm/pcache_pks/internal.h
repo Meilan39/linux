@@ -17,6 +17,7 @@ enum pks_stat_item {
 	PKS_STAT_INPOOL,	/* allocations served by in-pool reclaim */
 	PKS_STAT_INPOOL_TIMEOUT,/* in-pool reclaims that waited in vain */
 	PKS_STAT_EVICTED,	/* pages the pool evicted itself */
+	PKS_STAT_REFUSED,	/* write grants refused */
 	PKS_NR_STATS,
 };
 
@@ -52,6 +53,10 @@ int pks_pool_init(void);
 struct page *pks_pool_alloc(gfp_t gfp);
 void pks_pool_free(struct page *page);
 void pks_pool_info(struct pks_pool_info *info);
+
+/* scope.c */
+extern const char * const pks_site_names[PKS_NR_SITES];
+unsigned long pks_scope_count(enum pcache_pks_site site);
 
 /* alias.c: the second, writable mapping of protected memory */
 int pks_alias_init(void);

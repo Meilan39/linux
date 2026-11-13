@@ -10,6 +10,7 @@
  *   core.c	this file
  *   pool.c	placement: which memory is tagged, and when
  *   alias.c	the second mapping, through which granted stores are made
+ *   scope.c	write scopes: who is granted access to the alias, and when
  */
 #define pr_fmt(fmt) "pcache_pks: " fmt
 
@@ -88,6 +89,19 @@ static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
 PKS_STAT_ATTR(tag_ops, PKS_STAT_TAG);
 PKS_STAT_ATTR(untag_ops, PKS_STAT_UNTAG);
 PKS_STAT_ATTR(tlb_flushes, PKS_STAT_FLUSH);
+PKS_STAT_ATTR(refused_grants, PKS_STAT_REFUSED);
+
+static ssize_t scope_count_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	unsigned long sum = 0;
+	int site;
+
+	for (site = 0; site < PKS_NR_SITES; site++)
+		sum += pks_scope_count(site);
+	return sysfs_emit(buf, "%lu\n", sum);
+}
+static struct kobj_attribute scope_count_attr = __ATTR_RO(scope_count);
 
 static ssize_t tagged_kb_show(struct kobject *kobj,
 			      struct kobj_attribute *attr, char *buf)
@@ -116,6 +130,8 @@ static struct attribute *pcache_pks_attrs[] = {
 	&tag_ops_attr.attr,
 	&untag_ops_attr.attr,
 	&tlb_flushes_attr.attr,
+	&scope_count_attr.attr,
+	&refused_grants_attr.attr,
 	NULL,
 };
 
