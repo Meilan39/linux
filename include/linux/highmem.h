@@ -7,6 +7,7 @@
 #include <linux/bug.h>
 #include <linux/cacheflush.h>
 #include <linux/mm.h>
+#include <linux/pcache_pks_page.h>
 #include <linux/uaccess.h>
 #include <linux/hardirq.h>
 
@@ -239,15 +240,17 @@ static inline void zero_user_segments(struct page *page,
 		unsigned start2, unsigned end2)
 {
 	void *kaddr = kmap_local_page(page);
+	/* Zeroing is a store a write path makes: use the write alias. */
+	void *waddr = pcache_pks_waddr(page, kaddr);
 	unsigned int i;
 
 	BUG_ON(end1 > page_size(page) || end2 > page_size(page));
 
 	if (end1 > start1)
-		memset(kaddr + start1, 0, end1 - start1);
+		memset(waddr + start1, 0, end1 - start1);
 
 	if (end2 > start2)
-		memset(kaddr + start2, 0, end2 - start2);
+		memset(waddr + start2, 0, end2 - start2);
 
 	kunmap_local(kaddr);
 	for (i = 0; i < compound_nr(page); i++)
@@ -358,7 +361,7 @@ static inline void memcpy_to_page(struct page *page, size_t offset,
 static inline void memzero_page(struct page *page, size_t offset, size_t len)
 {
 	char *addr = kmap_local_page(page);
-	memset(addr + offset, 0, len);
+	memset(pcache_pks_waddr(page, addr) + offset, 0, len);
 	flush_dcache_page(page);
 	kunmap_local(addr);
 }

@@ -6,6 +6,7 @@
 #include <linux/uio.h>
 #include <linux/pagemap.h>
 #include <linux/highmem.h>
+#include <linux/pcache_pks_page.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/splice.h>
@@ -38,6 +39,17 @@
 	n = off;						\
 }
 
+/*
+ * A copy into a bvec may be filling protected page-cache pages, when a block
+ * driver serves a read by copying. That store goes through the write alias.
+ * A copy out of a bvec only reads, and uses the address it was given.
+ */
+static inline void *bvec_kaddr(const struct iov_iter *i, struct page *page,
+			       void *kaddr)
+{
+	return i->data_source ? kaddr : pcache_pks_waddr(page, kaddr);
+}
+
 #define iterate_bvec(i, n, base, len, off, p, STEP) {		\
 	size_t off = 0;						\
 	unsigned skip = i->iov_offset;				\
@@ -46,7 +58,9 @@
 		unsigned left;					\
 		void *kaddr = kmap_local_page(p->bv_page +	\
 					offset / PAGE_SIZE);	\
-		base = kaddr + offset % PAGE_SIZE;		\
+		base = bvec_kaddr(i, p->bv_page +		\
+				  offset / PAGE_SIZE, kaddr) +	\
+		       offset % PAGE_SIZE;			\
 		len = min(min(n, (size_t)(p->bv_len - skip)),	\
 		     (size_t)(PAGE_SIZE - offset % PAGE_SIZE));	\
 		left = (STEP);					\
@@ -956,7 +970,10 @@ EXPORT_SYMBOL(iov_iter_zero);
 size_t copy_page_from_iter_atomic(struct page *page, unsigned offset, size_t bytes,
 				  struct iov_iter *i)
 {
-	char *kaddr = kmap_atomic(page), *p = kaddr + offset;
+	char *kaddr = kmap_atomic(page);
+	/* This is the buffered-write copy: store through the write alias. */
+	char *p = pcache_pks_waddr(page, kaddr) + offset;
+
 	if (unlikely(!page_copy_sane(page, offset, bytes))) {
 		kunmap_atomic(kaddr);
 		return 0;
