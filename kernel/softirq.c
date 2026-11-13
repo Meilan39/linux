@@ -27,6 +27,7 @@
 #include <linux/tick.h>
 #include <linux/irq.h>
 #include <linux/wait_bit.h>
+#include <linux/pcache_pks.h>
 
 #include <asm/softirq_stack.h>
 
@@ -517,6 +518,7 @@ asmlinkage __visible void __softirq_entry __do_softirq(void)
 	unsigned long end = jiffies + MAX_SOFTIRQ_TIME;
 	unsigned long old_flags = current->flags;
 	int max_restart = MAX_SOFTIRQ_RESTART;
+	struct pcache_pks_scope pks_scope;
 	struct softirq_action *h;
 	bool in_hardirq;
 	__u32 pending;
@@ -528,6 +530,7 @@ asmlinkage __visible void __softirq_entry __do_softirq(void)
 	 * again if the socket is related to swapping.
 	 */
 	current->flags &= ~PF_MEMALLOC;
+	pcache_pks_scope_clamp(&pks_scope);
 
 	pending = local_softirq_pending();
 
@@ -585,6 +588,7 @@ restart:
 	account_softirq_exit(current);
 	lockdep_softirq_end(in_hardirq);
 	softirq_handle_end();
+	pcache_pks_scope_end(&pks_scope);
 	current_restore_flags(old_flags, PF_MEMALLOC);
 }
 

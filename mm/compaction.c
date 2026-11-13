@@ -2605,6 +2605,7 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 		enum compact_priority prio, struct page **capture)
 {
 	int may_perform_io = gfp_mask & __GFP_IO;
+	struct pcache_pks_scope pks_scope;
 	struct zoneref *z;
 	struct zone *zone;
 	enum compact_result rc = COMPACT_SKIPPED;
@@ -2616,6 +2617,7 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 	if (!may_perform_io)
 		return COMPACT_SKIPPED;
 
+	pcache_pks_scope_clamp(&pks_scope);
 	trace_mm_compaction_try_to_compact_pages(order, gfp_mask, prio);
 
 	/* Compact each zone in the list */
@@ -2665,6 +2667,7 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			break;
 	}
 
+	pcache_pks_scope_end(&pks_scope);
 	return rc;
 }
 

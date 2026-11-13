@@ -867,17 +867,24 @@ static struct page *pks_reclaim_inpool(gfp_t gfp)
  * Slow path: grow, or failing that find a page inside the pool. Each attempt
  * returns the page it wins straight to this caller, so only an attempt that
  * found nothing counts against the budget.
+ *
+ * Runs clamped: ->write_begin() reaches here inside an open write scope, and
+ * none of the reclaim, compaction, tagging or eviction below may run with
+ * write access.
  */
 static struct page *pks_alloc_slow(gfp_t gfp)
 {
+	struct pcache_pks_scope scope;
 	struct page *page = NULL;
 	int tries;
 
+	pcache_pks_scope_clamp(&scope);
 	for (tries = 0; tries < PKS_GROW_TRIES && !page; tries++) {
 		page = pks_grow(gfp);
 		if (!page && READ_ONCE(pks_pool.nr_blocks))
 			page = pks_reclaim_inpool(gfp);
 	}
+	pcache_pks_scope_end(&scope);
 	return page;
 }
 
@@ -965,12 +972,15 @@ static unsigned long pks_shrink_count(struct shrinker *s,
 static unsigned long pks_shrink_scan(struct shrinker *s,
 				     struct shrink_control *sc)
 {
+	struct pcache_pks_scope scope;
 	unsigned long reserve, freed;
 	unsigned int noreclaim;
 
 	if (!pcache_pks_is_enabled() || !READ_ONCE(pks_pool.nr_blocks))
 		return SHRINK_STOP;
 
+	/* Some reclaim callers, such as __node_reclaim(), do not clamp. */
+	pcache_pks_scope_clamp(&scope);
 	noreclaim = memalloc_noreclaim_save();
 
 	reserve = pks_reserve_blocks(READ_ONCE(pks_pool.nr_blocks));
@@ -989,6 +999,7 @@ static unsigned long pks_shrink_scan(struct shrinker *s,
 	}
 
 	memalloc_noreclaim_restore(noreclaim);
+	pcache_pks_scope_end(&scope);
 
 	return freed ? freed : SHRINK_STOP;
 }
