@@ -357,6 +357,10 @@ int folio_migrate_mapping(struct address_space *mapping,
 	int expected_count = expected_page_refs(mapping, &folio->page) + extra_count;
 	long nr = folio_nr_pages(folio);
 
+	/* Pool folios never leave the PKS pool. */
+	if (pcache_pks_page(&folio->page))
+		return -EBUSY;
+
 	if (!mapping) {
 		/* Anonymous page without mapping */
 		if (folio_ref_count(folio) != expected_count)

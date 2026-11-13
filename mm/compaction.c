@@ -959,6 +959,14 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		}
 
 		/*
+		 * PKS pool pages are tagged and cannot be migrated; never
+		 * isolate one, including from an alloc_contig_range() scan that
+		 * bypasses suitable_migration_source().
+		 */
+		if (unlikely(pcache_pks_page(page)))
+			goto isolate_fail;
+
+		/*
 		 * Regardless of being on LRU, compound pages such as THP and
 		 * hugetlbfs are not to be compacted unless we are attempting
 		 * an allocation much larger than the huge page size (eg CMA).
@@ -1263,6 +1271,10 @@ static bool suitable_migration_source(struct compact_control *cc,
 							struct page *page)
 {
 	int block_mt;
+
+	/* PKS pool blocks are tagged and never migrate; leave them alone. */
+	if (pcache_pks_page(page))
+		return false;
 
 	if (pageblock_skip_persistent(page))
 		return false;
