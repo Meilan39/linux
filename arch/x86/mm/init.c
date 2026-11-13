@@ -212,6 +212,24 @@ static inline void cr4_set_bits_and_update_boot(unsigned long mask)
 	cr4_set_bits(mask);
 }
 
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+/*
+ * Evaluation only: direct_map_4k maps the direct map with 4 KiB pages, as
+ * debug_pagealloc does but without its checks. It prices the layout that
+ * per-page tagging converges to, on a kernel that tags nothing.
+ */
+static bool direct_map_4k __initdata;
+
+static int __init setup_direct_map_4k(char *str)
+{
+	direct_map_4k = true;
+	return 0;
+}
+early_param("direct_map_4k", setup_direct_map_4k);
+#else
+#define direct_map_4k false
+#endif
+
 static void __init probe_page_size_mask(void)
 {
 	/*
@@ -219,7 +237,8 @@ static void __init probe_page_size_mask(void)
 	 * This will simplify cpa(), which otherwise needs to support splitting
 	 * large pages into small in interrupt context, etc.
 	 */
-	if (boot_cpu_has(X86_FEATURE_PSE) && !debug_pagealloc_enabled())
+	if (boot_cpu_has(X86_FEATURE_PSE) && !debug_pagealloc_enabled() &&
+	    !direct_map_4k)
 		page_size_mask |= 1 << PG_LEVEL_2M;
 	else
 		direct_gbpages = 0;
