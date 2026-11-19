@@ -850,6 +850,19 @@ config PCACHE_PKS_BASELINES
 
 	  If unsure, say N.
 
+config PCACHE_PKS_EVAL_DIRTY_PIPE
+	bool "Leave pipe_buffer flags uninitialized in iov_iter, for evaluation"
+	depends on PCACHE_PKS_BASELINES
+	default n
+	help
+	  Omit the buf->flags = 0 initialization in copy_page_to_iter_pipe()
+	  and push_pipe() so that evaluation kernels built on v5.18-rc3 can
+	  exercise unscoped pipe-merge page-cache writes (CVE-2022-0847)
+	  against the PKS protection.
+
+	  Enable only in security evaluation kernels, never in timed or
+	  production builds. If unsure, say N.
+
 config PCACHE_PKS_DEBUG
 	bool "Debugging of the PKS page-cache protection"
 	depends on PCACHE_PKS && DEBUG_FS
