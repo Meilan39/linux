@@ -62,6 +62,13 @@ PKS_STAT_ATTR(refused_grants, PKS_STAT_REFUSED);
 PKS_STAT_ATTR(suppressed_faults, PKS_STAT_FAULT_COMPLETED);
 PKS_STAT_ATTR(stopped_faults, PKS_STAT_FAULT_STOPPED);
 
+static ssize_t scope_count_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%lu\n", pks_scope_total());
+}
+static struct kobj_attribute scope_count_attr = __ATTR_RO(scope_count);
+
 static ssize_t tagged_kb_show(struct kobject *kobj,
 			      struct kobj_attribute *attr, char *buf)
 {
@@ -88,6 +95,7 @@ static struct attribute *pcache_pks_attrs[] = {
 	&tag_ops_attr.attr,
 	&untag_ops_attr.attr,
 	&tlb_flushes_attr.attr,
+	&scope_count_attr.attr,
 	&refused_grants_attr.attr,
 	&suppressed_faults_attr.attr,
 	&stopped_faults_attr.attr,

@@ -64,6 +64,11 @@ static inline void pks_audit_range(unsigned long addr, unsigned long size,
 }
 #endif
 
+/* scope.c */
+extern const char * const pks_site_names[PKS_NR_SITES];
+unsigned long pks_scope_count(enum pcache_pks_site site);
+unsigned long pks_scope_total(void);
+
 /* alias.c */
 int pks_alias_init(void);
 void pks_alias_exit(void);
