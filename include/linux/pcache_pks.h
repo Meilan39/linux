@@ -235,6 +235,10 @@ static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope)
 	}
 }
 
+struct pt_regs;
+bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
+			       bool write);
+
 static inline bool pcache_pks_file(const struct file *file)
 {
 	return pcache_pks_mapping(file->f_mapping);

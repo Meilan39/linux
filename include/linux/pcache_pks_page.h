@@ -45,6 +45,22 @@ static inline void *pcache_pks_waddr(const struct page *page, void *kaddr)
 	return kaddr;
 }
 
+/*
+ * PG_error on a protected page that is being filled means that a store of the
+ * fill was refused. Forget an earlier error, such as one of writeback, before
+ * the read is issued.
+ */
+static inline void pcache_pks_fill_begin(struct page *page)
+{
+	if (unlikely(pcache_pks_page(page)) && !PageUptodate(page))
+		ClearPageError(page);
+}
+
+static inline bool pcache_pks_fill_failed(struct page *page)
+{
+	return unlikely(pcache_pks_page(page) && PageError(page));
+}
+
 #else /* !CONFIG_PCACHE_PKS */
 
 struct page;
@@ -62,6 +78,15 @@ static inline bool pcache_pks_page(const struct page *page)
 static inline void *pcache_pks_waddr(const struct page *page, void *kaddr)
 {
 	return kaddr;
+}
+
+static inline void pcache_pks_fill_begin(struct page *page)
+{
+}
+
+static inline bool pcache_pks_fill_failed(struct page *page)
+{
+	return false;
 }
 
 #endif /* CONFIG_PCACHE_PKS */
