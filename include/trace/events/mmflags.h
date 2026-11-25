@@ -50,6 +50,7 @@
 	{(unsigned long)__GFP_DIRECT_RECLAIM,	"__GFP_DIRECT_RECLAIM"},\
 	{(unsigned long)__GFP_KSWAPD_RECLAIM,	"__GFP_KSWAPD_RECLAIM"},\
 	{(unsigned long)__GFP_ZEROTAGS,		"__GFP_ZEROTAGS"}	\
+	__def_gfpflag_names_pks
 
 #ifdef CONFIG_KASAN_HW_TAGS
 #define __def_gfpflag_names_kasan ,					       \
@@ -58,6 +59,13 @@
 	{(unsigned long)__GFP_SKIP_KASAN_UNPOISON, "__GFP_SKIP_KASAN_UNPOISON"}
 #else
 #define __def_gfpflag_names_kasan
+#endif
+
+#ifdef CONFIG_PCACHE_PKS
+#define __def_gfpflag_names_pks ,					       \
+	{(unsigned long)__GFP_PKS,		"__GFP_PKS"}
+#else
+#define __def_gfpflag_names_pks
 #endif
 
 #define show_gfp_flags(flags)						\
@@ -244,6 +252,12 @@ IF_HAVE_VM_SOFTDIRTY(VM_SOFTDIRTY,	"softdirty"	)		\
 #define IFDEF_ZONE_DMA(X)
 #endif
 
+#ifdef CONFIG_PCACHE_PKS
+#define IFDEF_ZONE_PKS(X) X
+#else
+#define IFDEF_ZONE_PKS(X)
+#endif
+
 #ifdef CONFIG_ZONE_DMA32
 #define IFDEF_ZONE_DMA32(X) X
 #else
@@ -258,6 +272,7 @@ IF_HAVE_VM_SOFTDIRTY(VM_SOFTDIRTY,	"softdirty"	)		\
 
 #define ZONE_TYPE						\
 	IFDEF_ZONE_DMA(		EM (ZONE_DMA,	 "DMA"))	\
+	IFDEF_ZONE_PKS(		EM (ZONE_PKS,	 "PKS"))	\
 	IFDEF_ZONE_DMA32(	EM (ZONE_DMA32,	 "DMA32"))	\
 				EM (ZONE_NORMAL, "Normal")	\
 	IFDEF_ZONE_HIGHMEM(	EM (ZONE_HIGHMEM,"HighMem"))	\

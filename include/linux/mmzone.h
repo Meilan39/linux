@@ -430,6 +430,20 @@ enum zone_type {
 #ifdef CONFIG_ZONE_DMA
 	ZONE_DMA,
 #endif
+#ifdef CONFIG_PCACHE_PKS
+	/*
+	 * Memory whose kernel mapping carries PKS_KEY_PAGE_CACHE. Unlike the
+	 * other zones it has no fixed physical range: whole pageblocks move
+	 * between it and their physical home zone.
+	 *
+	 * Placing it below ZONE_DMA32 means ordinary allocations from DMA32
+	 * upward can reclaim protected page cache, while protected allocations
+	 * (reclaim_idx = ZONE_PKS) never reclaim ordinary user or kernel pages
+	 * above ZONE_DMA. Allocation routing is governed by ZONELIST_PKS so
+	 * only __GFP_PKS requests reach this zone.
+	 */
+	ZONE_PKS,
+#endif
 #ifdef CONFIG_ZONE_DMA32
 	ZONE_DMA32,
 #endif
@@ -768,6 +782,13 @@ enum {
 	 */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
 #endif
+#ifdef CONFIG_PCACHE_PKS
+	/* ZONE_PKS across online nodes, and no other zone. */
+	ZONELIST_PKS,
+#ifdef CONFIG_NUMA
+	ZONELIST_PKS_NOFALLBACK,
+#endif
+#endif
 	MAX_ZONELISTS
 };
 
@@ -995,6 +1016,18 @@ static inline int local_memory_node(int node_id) { return node_id; };
  * zone_idx() returns 0 for the ZONE_DMA zone, 1 for the ZONE_NORMAL zone, etc.
  */
 #define zone_idx(zone)		((zone) - (zone)->zone_pgdat->node_zones)
+
+#ifdef CONFIG_PCACHE_PKS
+static inline bool zone_is_pks(const struct zone *zone)
+{
+	return zone_idx(zone) == ZONE_PKS;
+}
+#else
+static inline bool zone_is_pks(const struct zone *zone)
+{
+	return false;
+}
+#endif
 
 #ifdef CONFIG_ZONE_DEVICE
 static inline bool zone_is_zone_device(struct zone *zone)

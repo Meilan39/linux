@@ -1156,6 +1156,12 @@ int fragmentation_index(struct zone *zone, unsigned int order)
 #define TEXT_FOR_DMA(xx)
 #endif
 
+#ifdef CONFIG_PCACHE_PKS
+#define TEXT_FOR_PKS(xx) xx "_pks",
+#else
+#define TEXT_FOR_PKS(xx)
+#endif
+
 #ifdef CONFIG_ZONE_DMA32
 #define TEXT_FOR_DMA32(xx) xx "_dma32",
 #else
@@ -1168,7 +1174,7 @@ int fragmentation_index(struct zone *zone, unsigned int order)
 #define TEXT_FOR_HIGHMEM(xx)
 #endif
 
-#define TEXTS_FOR_ZONES(xx) TEXT_FOR_DMA(xx) TEXT_FOR_DMA32(xx) xx "_normal", \
+#define TEXTS_FOR_ZONES(xx) TEXT_FOR_DMA(xx) TEXT_FOR_PKS(xx) TEXT_FOR_DMA32(xx) xx "_normal", \
 					TEXT_FOR_HIGHMEM(xx) xx "_movable",
 
 const char * const vmstat_text[] = {

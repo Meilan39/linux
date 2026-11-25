@@ -288,6 +288,9 @@ int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES] = {
 #ifdef CONFIG_ZONE_DMA
 	[ZONE_DMA] = 256,
 #endif
+#ifdef CONFIG_PCACHE_PKS
+	[ZONE_PKS] = 0,
+#endif
 #ifdef CONFIG_ZONE_DMA32
 	[ZONE_DMA32] = 256,
 #endif
@@ -301,6 +304,9 @@ int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES] = {
 static char * const zone_names[MAX_NR_ZONES] = {
 #ifdef CONFIG_ZONE_DMA
 	 "DMA",
+#endif
+#ifdef CONFIG_PCACHE_PKS
+	 "PKS",
 #endif
 #ifdef CONFIG_ZONE_DMA32
 	 "DMA32",
@@ -4320,6 +4326,9 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 	/* The OOM killer will not help higher order allocs */
 	if (order > PAGE_ALLOC_COSTLY_ORDER)
 		goto out;
+	/* nor protected ones, which wait for a block of that kind */
+	if (gfp_mask & __GFP_PKS)
+		goto out;
 	/*
 	 * We have already exhausted all our reclaim opportunities without any
 	 * success so it is time to admit defeat. We will skip the OOM killer
@@ -4360,6 +4369,27 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 out:
 	mutex_unlock(&oom_lock);
 	return page;
+}
+
+/* Move blocks into ZONE_PKS from the nearest permitted node, then retry. */
+static struct page *
+__alloc_pages_direct_promote(gfp_t gfp_mask, unsigned int order,
+			     unsigned int alloc_flags,
+			     const struct alloc_context *ac)
+{
+	struct zoneref *z;
+	struct zone *zone;
+
+	for_each_zone_zonelist_nodemask(zone, z, ac->zonelist,
+					ac->highest_zoneidx, ac->nodemask) {
+		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
+		    !__cpuset_zone_allowed(zone, gfp_mask))
+			continue;
+		if (pks_zone_grow(zone, gfp_mask))
+			return get_page_from_freelist(gfp_mask, order,
+						      alloc_flags, ac);
+	}
+	return NULL;
 }
 
 /*
@@ -5042,6 +5072,14 @@ retry:
 	if (current->flags & PF_MEMALLOC)
 		goto nopage;
 
+	/* Protected allocations grow ZONE_PKS before reclaiming inside it. */
+	if (gfp_mask & __GFP_PKS) {
+		page = __alloc_pages_direct_promote(gfp_mask, order,
+						    alloc_flags, ac);
+		if (page)
+			goto got_pg;
+	}
+
 	/* Try direct reclaim and then allocating */
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
 							&did_some_progress);
@@ -5181,6 +5219,10 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 	fs_reclaim_release(gfp_mask);
 
 	might_sleep_if(gfp_mask & __GFP_DIRECT_RECLAIM);
+
+	/* Protected pages may not be zeroed through the direct map. */
+	if (WARN_ON_ONCE((gfp_mask & __GFP_PKS) && (gfp_mask & __GFP_ZERO)))
+		return false;
 
 	if (should_fail_alloc_page(gfp_mask, order))
 		return false;
@@ -6120,9 +6162,11 @@ static void zoneref_set_zone(struct zone *zone, struct zoneref *zoneref)
 /*
  * Builds allocation fallback zone lists.
  *
- * Add all populated zones of a node to the zonelist.
+ * Add all populated zones of a node to the zonelist. ZONE_PKS appears solely
+ * on ZONELIST_PKS*, whether populated yet or not, and on no ordinary zonelist.
  */
-static int build_zonerefs_node(pg_data_t *pgdat, struct zoneref *zonerefs)
+static int build_zonerefs_node(pg_data_t *pgdat, struct zoneref *zonerefs,
+			       bool pks)
 {
 	struct zone *zone;
 	enum zone_type zone_type = MAX_NR_ZONES;
@@ -6131,7 +6175,9 @@ static int build_zonerefs_node(pg_data_t *pgdat, struct zoneref *zonerefs)
 	do {
 		zone_type--;
 		zone = pgdat->node_zones + zone_type;
-		if (populated_zone(zone)) {
+		if (zone_is_pks(zone) != pks)
+			continue;
+		if (pks || populated_zone(zone)) {
 			zoneref_set_zone(zone, &zonerefs[nr_zones++]);
 			check_highest_zone(zone_type);
 		}
@@ -6240,19 +6286,19 @@ int find_next_best_node(int node, nodemask_t *used_node_mask)
  * DMA zone, if any--but risks exhausting DMA zone.
  */
 static void build_zonelists_in_node_order(pg_data_t *pgdat, int *node_order,
-		unsigned nr_nodes)
+		unsigned nr_nodes, int list)
 {
 	struct zoneref *zonerefs;
 	int i;
 
-	zonerefs = pgdat->node_zonelists[ZONELIST_FALLBACK]._zonerefs;
+	zonerefs = pgdat->node_zonelists[ZONELIST_FALLBACK + list]._zonerefs;
 
 	for (i = 0; i < nr_nodes; i++) {
 		int nr_zones;
 
 		pg_data_t *node = NODE_DATA(node_order[i]);
 
-		nr_zones = build_zonerefs_node(node, zonerefs);
+		nr_zones = build_zonerefs_node(node, zonerefs, list != 0);
 		zonerefs += nr_zones;
 	}
 	zonerefs->zone = NULL;
@@ -6262,13 +6308,13 @@ static void build_zonelists_in_node_order(pg_data_t *pgdat, int *node_order,
 /*
  * Build gfp_thisnode zonelists
  */
-static void build_thisnode_zonelists(pg_data_t *pgdat)
+static void build_thisnode_zonelists(pg_data_t *pgdat, int list)
 {
 	struct zoneref *zonerefs;
 	int nr_zones;
 
-	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
-	nr_zones = build_zonerefs_node(pgdat, zonerefs);
+	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK + list]._zonerefs;
+	nr_zones = build_zonerefs_node(pgdat, zonerefs, list != 0);
 	zonerefs += nr_zones;
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
@@ -6309,8 +6355,12 @@ static void build_zonelists(pg_data_t *pgdat)
 		load--;
 	}
 
-	build_zonelists_in_node_order(pgdat, node_order, nr_nodes);
-	build_thisnode_zonelists(pgdat);
+	build_zonelists_in_node_order(pgdat, node_order, nr_nodes, 0);
+	build_thisnode_zonelists(pgdat, 0);
+#ifdef CONFIG_PCACHE_PKS
+	build_zonelists_in_node_order(pgdat, node_order, nr_nodes, ZONELIST_PKS);
+	build_thisnode_zonelists(pgdat, ZONELIST_PKS);
+#endif
 	pr_info("Fallback order for Node %d: ", local_node);
 	for (node = 0; node < nr_nodes; node++)
 		pr_cont("%d ", node_order[node]);
@@ -6348,7 +6398,7 @@ static void build_zonelists(pg_data_t *pgdat)
 	local_node = pgdat->node_id;
 
 	zonerefs = pgdat->node_zonelists[ZONELIST_FALLBACK]._zonerefs;
-	nr_zones = build_zonerefs_node(pgdat, zonerefs);
+	nr_zones = build_zonerefs_node(pgdat, zonerefs, false);
 	zonerefs += nr_zones;
 
 	/*
@@ -6362,18 +6412,25 @@ static void build_zonelists(pg_data_t *pgdat)
 	for (node = local_node + 1; node < MAX_NUMNODES; node++) {
 		if (!node_online(node))
 			continue;
-		nr_zones = build_zonerefs_node(NODE_DATA(node), zonerefs);
+		nr_zones = build_zonerefs_node(NODE_DATA(node), zonerefs, false);
 		zonerefs += nr_zones;
 	}
 	for (node = 0; node < local_node; node++) {
 		if (!node_online(node))
 			continue;
-		nr_zones = build_zonerefs_node(NODE_DATA(node), zonerefs);
+		nr_zones = build_zonerefs_node(NODE_DATA(node), zonerefs, false);
 		zonerefs += nr_zones;
 	}
 
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
+
+#ifdef CONFIG_PCACHE_PKS
+	zonerefs = pgdat->node_zonelists[ZONELIST_PKS]._zonerefs;
+	zonerefs += build_zonerefs_node(pgdat, zonerefs, true);
+	zonerefs->zone = NULL;
+	zonerefs->zone_idx = 0;
+#endif
 }
 
 #endif	/* CONFIG_NUMA */
@@ -6880,6 +6937,10 @@ static int zone_batchsize(struct zone *zone)
 	 */
 	batch = rounddown_pow_of_two(batch + batch/2) - 1;
 
+	/* ZONE_PKS changes size all the time; its pagesets do not follow it */
+	if (zone_is_pks(zone))
+		batch = 31;
+
 	return batch;
 
 #else
@@ -6941,6 +7002,8 @@ static int zone_highsize(struct zone *zone, int batch, int cpu_online)
 	 * historical relationship between high and batch.
 	 */
 	high = max(high, batch << 2);
+	if (zone_is_pks(zone))
+		high = 128;
 
 	return high;
 #else
@@ -7043,6 +7106,9 @@ void __meminit setup_zone_pageset(struct zone *zone)
 		per_cpu_pages_init(pcp, pzstats);
 	}
 
+	/* What was set before was set on the boot pagesets: set it again */
+	zone->pageset_high = BOOT_PAGESET_HIGH;
+	zone->pageset_batch = BOOT_PAGESET_BATCH;
 	zone_set_pageset_high_and_batch(zone, 0);
 }
 
@@ -8505,6 +8571,52 @@ static void setup_per_zone_lowmem_reserve(void)
 	calculate_totalreserve_pages();
 }
 
+static DEFINE_SPINLOCK(zone_wmark_lock);
+
+static void setup_zone_wmarks_locked(struct zone *zone,
+				     unsigned long pages_min,
+				     unsigned long lowmem_pages)
+{
+	unsigned long managed = zone_managed_pages(zone);
+	u64 tmp;
+
+	tmp = (u64)pages_min * managed;
+	do_div(tmp, lowmem_pages);
+
+	if (is_highmem(zone)) {
+		/*
+		 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
+		 * need highmem pages, so cap pages_min to a small
+		 * value here.
+		 *
+		 * The WMARK_HIGH-WMARK_LOW and (WMARK_LOW-WMARK_MIN)
+		 * deltas control async page reclaim, and so should
+		 * not be capped for highmem.
+		 */
+		zone->_watermark[WMARK_MIN] = clamp(managed / 1024,
+						    SWAP_CLUSTER_MAX, 128UL);
+	} else {
+		/*
+		 * If it's a lowmem zone, reserve a number of pages
+		 * proportionate to the zone's size.
+		 */
+		zone->_watermark[WMARK_MIN] = tmp;
+	}
+
+	/*
+	 * Set the kswapd watermarks distance according to the
+	 * scale factor in proportion to available memory, but
+	 * ensure a minimum size on small systems.
+	 */
+	tmp = max_t(u64, tmp >> 2,
+		    mult_frac(managed, watermark_scale_factor, 10000));
+
+	zone->watermark_boost = 0;
+	zone->_watermark[WMARK_LOW]  = min_wmark_pages(zone) + tmp;
+	zone->_watermark[WMARK_HIGH] = low_wmark_pages(zone) + tmp;
+	zone->_watermark[WMARK_PROMO] = high_wmark_pages(zone) + tmp;
+}
+
 static void __setup_per_zone_wmarks(void)
 {
 	unsigned long pages_min = min_free_kbytes >> (PAGE_SHIFT - 10);
@@ -8519,54 +8631,50 @@ static void __setup_per_zone_wmarks(void)
 	}
 
 	for_each_zone(zone) {
-		u64 tmp;
-
 		spin_lock_irqsave(&zone->lock, flags);
-		tmp = (u64)pages_min * zone_managed_pages(zone);
-		do_div(tmp, lowmem_pages);
-		if (is_highmem(zone)) {
-			/*
-			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
-			 * need highmem pages, so cap pages_min to a small
-			 * value here.
-			 *
-			 * The WMARK_HIGH-WMARK_LOW and (WMARK_LOW-WMARK_MIN)
-			 * deltas control async page reclaim, and so should
-			 * not be capped for highmem.
-			 */
-			unsigned long min_pages;
-
-			min_pages = zone_managed_pages(zone) / 1024;
-			min_pages = clamp(min_pages, SWAP_CLUSTER_MAX, 128UL);
-			zone->_watermark[WMARK_MIN] = min_pages;
-		} else {
-			/*
-			 * If it's a lowmem zone, reserve a number of pages
-			 * proportionate to the zone's size.
-			 */
-			zone->_watermark[WMARK_MIN] = tmp;
-		}
-
-		/*
-		 * Set the kswapd watermarks distance according to the
-		 * scale factor in proportion to available memory, but
-		 * ensure a minimum size on small systems.
-		 */
-		tmp = max_t(u64, tmp >> 2,
-			    mult_frac(zone_managed_pages(zone),
-				      watermark_scale_factor, 10000));
-
-		zone->watermark_boost = 0;
-		zone->_watermark[WMARK_LOW]  = min_wmark_pages(zone) + tmp;
-		zone->_watermark[WMARK_HIGH] = low_wmark_pages(zone) + tmp;
-		zone->_watermark[WMARK_PROMO] = high_wmark_pages(zone) + tmp;
-
+		setup_zone_wmarks_locked(zone, pages_min, lowmem_pages);
 		spin_unlock_irqrestore(&zone->lock, flags);
 	}
 
 	/* update totalreserve_pages */
 	calculate_totalreserve_pages();
 }
+
+#ifdef CONFIG_PCACHE_PKS
+/*
+ * ZONE_PKS has changed size: refresh its watermarks and the reserve total, and
+ * leave the other zones alone. Reclaim gets here, also that of offline_pages(),
+ * which holds pcp_batch_high_lock, so no sleeping lock is taken.
+ */
+void pks_update_zone_wmarks(struct zone *zone)
+{
+	unsigned long pages_min = min_free_kbytes >> (PAGE_SHIFT - 10);
+	unsigned long lowmem_pages = 0;
+	unsigned long managed, old_present, flags;
+	struct zone *z;
+
+	spin_lock(&zone_wmark_lock);
+	for_each_zone(z) {
+		if (!is_highmem(z))
+			lowmem_pages += zone_managed_pages(z);
+	}
+	if (!lowmem_pages)
+		lowmem_pages = 1;
+
+	spin_lock_irqsave(&zone->lock, flags);
+	managed = zone_managed_pages(zone);
+	old_present = zone->present_pages;
+	zone->present_pages = managed;
+	setup_zone_wmarks_locked(zone, pages_min, lowmem_pages);
+	spin_unlock_irqrestore(&zone->lock, flags);
+
+	calculate_totalreserve_pages();
+	/* The thresholds follow the logarithm of the size */
+	if (fls_long(old_present) != fls_long(managed))
+		refresh_zone_stat_thresholds();
+	spin_unlock(&zone_wmark_lock);
+}
+#endif
 
 /**
  * setup_per_zone_wmarks - called when min_free_kbytes changes
@@ -8578,11 +8686,10 @@ static void __setup_per_zone_wmarks(void)
 void setup_per_zone_wmarks(void)
 {
 	struct zone *zone;
-	static DEFINE_SPINLOCK(lock);
 
-	spin_lock(&lock);
+	spin_lock(&zone_wmark_lock);
 	__setup_per_zone_wmarks();
-	spin_unlock(&lock);
+	spin_unlock(&zone_wmark_lock);
 
 	/*
 	 * The watermark size have changed so update the pcpu batch

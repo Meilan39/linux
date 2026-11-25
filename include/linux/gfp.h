@@ -63,6 +63,14 @@ struct vm_area_struct;
 #define ___GFP_SKIP_KASAN_UNPOISON	0
 #define ___GFP_SKIP_KASAN_POISON	0
 #endif
+#ifdef CONFIG_PCACHE_PKS
+#ifdef CONFIG_KASAN_HW_TAGS
+#error "CONFIG_PCACHE_PKS shares bit 0x1000000u with CONFIG_KASAN_HW_TAGS"
+#endif
+#define ___GFP_PKS		0x1000000u
+#else
+#define ___GFP_PKS		0
+#endif
 #ifdef CONFIG_LOCKDEP
 #define ___GFP_NOLOCKDEP	0x8000000u
 #else
@@ -256,6 +264,8 @@ struct vm_area_struct;
 #define __GFP_COMP	((__force gfp_t)___GFP_COMP)
 #define __GFP_ZERO	((__force gfp_t)___GFP_ZERO)
 #define __GFP_ZEROTAGS	((__force gfp_t)___GFP_ZEROTAGS)
+/* Allocate from ZONE_PKS; never passed to slab allocators. */
+#define __GFP_PKS	((__force gfp_t)___GFP_PKS)
 #define __GFP_SKIP_ZERO ((__force gfp_t)___GFP_SKIP_ZERO)
 #define __GFP_SKIP_KASAN_UNPOISON ((__force gfp_t)___GFP_SKIP_KASAN_UNPOISON)
 #define __GFP_SKIP_KASAN_POISON   ((__force gfp_t)___GFP_SKIP_KASAN_POISON)
@@ -448,7 +458,7 @@ static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
  *       0xe    => BAD (MOVABLE+DMA32+HIGHMEM)
  *       0xf    => BAD (MOVABLE+DMA32+HIGHMEM+DMA)
  *
- * GFP_ZONES_SHIFT must be <= 2 on 32 bit platforms.
+ * GFP_ZONES_SHIFT must be <= 4: the table is 64 bits wide.
  */
 
 #if defined(CONFIG_ZONE_DEVICE) && (MAX_NR_ZONES-1) <= 4
@@ -458,19 +468,19 @@ static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
 #define GFP_ZONES_SHIFT ZONES_SHIFT
 #endif
 
-#if 16 * GFP_ZONES_SHIFT > BITS_PER_LONG
+#if 16 * GFP_ZONES_SHIFT > BITS_PER_LONG_LONG
 #error GFP_ZONES_SHIFT too large to create GFP_ZONE_TABLE integer
 #endif
 
 #define GFP_ZONE_TABLE ( \
-	(ZONE_NORMAL << 0 * GFP_ZONES_SHIFT)				       \
-	| (OPT_ZONE_DMA << ___GFP_DMA * GFP_ZONES_SHIFT)		       \
-	| (OPT_ZONE_HIGHMEM << ___GFP_HIGHMEM * GFP_ZONES_SHIFT)	       \
-	| (OPT_ZONE_DMA32 << ___GFP_DMA32 * GFP_ZONES_SHIFT)		       \
-	| (ZONE_NORMAL << ___GFP_MOVABLE * GFP_ZONES_SHIFT)		       \
-	| (OPT_ZONE_DMA << (___GFP_MOVABLE | ___GFP_DMA) * GFP_ZONES_SHIFT)    \
-	| (ZONE_MOVABLE << (___GFP_MOVABLE | ___GFP_HIGHMEM) * GFP_ZONES_SHIFT)\
-	| (OPT_ZONE_DMA32 << (___GFP_MOVABLE | ___GFP_DMA32) * GFP_ZONES_SHIFT)\
+	((u64)ZONE_NORMAL << 0 * GFP_ZONES_SHIFT)				       \
+	| ((u64)OPT_ZONE_DMA << ___GFP_DMA * GFP_ZONES_SHIFT)		       \
+	| ((u64)OPT_ZONE_HIGHMEM << ___GFP_HIGHMEM * GFP_ZONES_SHIFT)	       \
+	| ((u64)OPT_ZONE_DMA32 << ___GFP_DMA32 * GFP_ZONES_SHIFT)	       \
+	| ((u64)ZONE_NORMAL << ___GFP_MOVABLE * GFP_ZONES_SHIFT)	       \
+	| ((u64)OPT_ZONE_DMA << (___GFP_MOVABLE | ___GFP_DMA) * GFP_ZONES_SHIFT)    \
+	| ((u64)ZONE_MOVABLE << (___GFP_MOVABLE | ___GFP_HIGHMEM) * GFP_ZONES_SHIFT)\
+	| ((u64)OPT_ZONE_DMA32 << (___GFP_MOVABLE | ___GFP_DMA32) * GFP_ZONES_SHIFT)\
 )
 
 /*
@@ -510,11 +520,27 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 
 static inline int gfp_zonelist(gfp_t flags)
 {
+	int list = ZONELIST_FALLBACK;
+
 #ifdef CONFIG_NUMA
 	if (unlikely(flags & __GFP_THISNODE))
-		return ZONELIST_NOFALLBACK;
+		list = ZONELIST_NOFALLBACK;
 #endif
-	return ZONELIST_FALLBACK;
+#ifdef CONFIG_PCACHE_PKS
+	if (unlikely(flags & __GFP_PKS))
+		list += ZONELIST_PKS;
+#endif
+	return list;
+}
+
+/* The highest zone whose pages a reclaim on behalf of @flags may take. */
+static inline enum zone_type gfp_reclaim_zone(gfp_t flags)
+{
+#ifdef CONFIG_PCACHE_PKS
+	if (unlikely(flags & __GFP_PKS))
+		return ZONE_PKS;
+#endif
+	return gfp_zone(flags);
 }
 
 /*
