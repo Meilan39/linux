@@ -534,6 +534,11 @@ struct thread_struct {
 #ifdef	CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
 	/* Saved Protection key register for supervisor mappings */
 	u32			pkrs;
+#ifdef CONFIG_PCACHE_PKS_DEBUG
+	u8			pks_scope_depth;
+	u8			pks_last_site;
+	unsigned long		pks_last_ip;
+#endif
 #endif
 
 	/* Floating point and extended processor state */

@@ -60,7 +60,6 @@ struct pcache_pks_scope {
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
 #include <linux/sched.h>
-#include <linux/timex.h>
 
 #define DEFINE_PCACHE_PKS_SCOPE(name) \
 	struct pcache_pks_scope name = { .active = false }
@@ -82,23 +81,34 @@ static inline bool pcache_pks_wkey_open(u32 pkrs)
 }
 
 #ifdef CONFIG_PCACHE_PKS_DEBUG
+#include <linux/timex.h>
+
+void pcache_pks_check_user_return(void);
 void pcache_pks_window_account(enum pcache_pks_site site, u64 cycles);
 
 static inline void pcache_pks_window_open(struct pcache_pks_scope *scope,
 					  unsigned int site)
 {
 	scope->site = site;
-	if (site < PKS_NR_SITES)
+	if (site < PKS_NR_SITES) {
 		scope->start = get_cycles();
+		current->thread.pks_scope_depth++;
+		current->thread.pks_last_site = site;
+		current->thread.pks_last_ip = _THIS_IP_;
+	}
 }
 
 static inline void pcache_pks_window_close(struct pcache_pks_scope *scope)
 {
-	if (scope->site < PKS_NR_SITES)
+	if (scope->site < PKS_NR_SITES) {
+		if (likely(current->thread.pks_scope_depth))
+			current->thread.pks_scope_depth--;
 		pcache_pks_window_account(scope->site,
 					  get_cycles() - scope->start);
+	}
 }
 #else
+static inline void pcache_pks_check_user_return(void) {}
 static inline void pcache_pks_window_open(struct pcache_pks_scope *scope,
 					  unsigned int site)
 {
@@ -336,6 +346,7 @@ static inline void pcache_pks_scope_begin_fill(struct pcache_pks_scope *scope,
 
 static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope) {}
 static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
+static inline void pcache_pks_check_user_return(void) {}
 
 #endif /* CONFIG_PCACHE_PKS */
 

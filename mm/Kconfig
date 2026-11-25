@@ -821,6 +821,18 @@ config PCACHE_PKS
 
 	  If unsure, say N.
 
+config PCACHE_PKS_DEBUG
+	bool "Debugging of the PKS page-cache protection"
+	depends on PCACHE_PKS && DEBUG_FS
+	help
+	  Add /sys/kernel/debug/pcache_pks/status, which reports ZONE_PKS
+	  capacity, event counters, faults by instruction class, scope-leak
+	  counts, and per-site write-scope timings. Enables direct-map and
+	  write-alias key audits plus per-thread scope-depth tracking on
+	  return to user mode.
+
+	  If unsure, say N.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN
