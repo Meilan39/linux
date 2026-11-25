@@ -3671,6 +3671,16 @@ static const struct address_space_operations ext4_dax_aops = {
 	.swap_activate		= ext4_iomap_swap_activate,
 };
 
+/* Regular files that hold user data, on a pks_pagecache mount. */
+static bool ext4_should_pks_protect(struct inode *inode)
+{
+	return test_opt2(inode->i_sb, PKS_PAGECACHE) &&
+	       S_ISREG(inode->i_mode) &&
+	       inode->i_ino >= EXT4_FIRST_INO(inode->i_sb) &&
+	       !ext4_is_quota_file(inode) &&
+	       !ext4_test_inode_flag(inode, EXT4_INODE_EA_INODE);
+}
+
 void ext4_set_aops(struct inode *inode)
 {
 	switch (ext4_inode_journal_mode(inode)) {
@@ -3689,6 +3699,9 @@ void ext4_set_aops(struct inode *inode)
 		inode->i_mapping->a_ops = &ext4_da_aops;
 	else
 		inode->i_mapping->a_ops = &ext4_aops;
+
+	if (ext4_should_pks_protect(inode))
+		mapping_set_pks_protected(inode->i_mapping);
 }
 
 static int __ext4_block_zero_page_range(handle_t *handle,
@@ -4590,6 +4603,8 @@ static bool ext4_should_enable_dax(struct inode *inode)
 
 	if (test_opt2(inode->i_sb, DAX_NEVER))
 		return false;
+	if (ext4_should_pks_protect(inode))
+		return false;
 	if (!S_ISREG(inode->i_mode))
 		return false;
 	if (ext4_should_journal_data(inode))
@@ -5313,6 +5328,7 @@ int ext4_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 		 struct iattr *attr)
 {
 	struct inode *inode = d_inode(dentry);
+	struct page *tail = NULL;
 	int error, rc = 0;
 	int orphan = 0;
 	const unsigned int ia_valid = attr->ia_valid;
@@ -5398,6 +5414,22 @@ int ext4_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 		}
 		if (!S_ISREG(inode->i_mode)) {
 			return -EINVAL;
+		}
+
+		/*
+		 * Zeroing the rest of the new last block needs its page in the
+		 * cache. For a protected file, memory for it can be refused
+		 * where an ordinary page would be found, and ext4_truncate()
+		 * could not undo the size change. So bring the page in first,
+		 * and hold it.
+		 */
+		if (shrink && pcache_pks_mapping(inode->i_mapping) &&
+		    (attr->ia_size & (inode->i_sb->s_blocksize - 1))) {
+			tail = read_mapping_page(inode->i_mapping,
+						 attr->ia_size >> PAGE_SHIFT,
+						 NULL);
+			if (IS_ERR(tail))
+				return PTR_ERR(tail);
 		}
 
 		if (IS_I_VERSION(inode) && attr->ia_size != inode->i_size)
@@ -5515,6 +5547,8 @@ out_mmap_sem:
 		rc = posix_acl_chmod(mnt_userns, inode, inode->i_mode);
 
 err_out:
+	if (tail)
+		put_page(tail);
 	if  (error)
 		ext4_std_error(inode->i_sb, error);
 	if (!error)
