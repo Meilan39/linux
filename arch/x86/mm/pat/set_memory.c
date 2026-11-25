@@ -1984,6 +1984,48 @@ int set_memory_global(unsigned long addr, int numpages)
 }
 
 /*
+ * Set the protection key of a kernel mapping without flushing the TLB, so that
+ * a caller tagging multiple ranges can issue one flush for the batch.
+ *
+ * The caller flushes, and runs vm_unmap_aliases() once before a promotion batch
+ * so no lazily freed vmalloc alias retains a stale writable mapping.
+ *
+ * @need_flush_all is set when a single invlpg per @addr does not cover the
+ * update: cpa_process_alias() rewrote kernel-image aliases, or the leaf mapping
+ * is smaller than @numpages pages.
+ */
+int set_memory_pkey_noflush(unsigned long addr, int numpages, int pkey,
+			    bool *need_flush_all)
+{
+	struct cpa_data cpa = {
+		.vaddr	  = &addr,
+		.numpages = numpages,
+		.mask_set = canon_pgprot(__pgprot(_PAGE_PKEY(pkey))),
+		.mask_clr = __pgprot(_PAGE_PKEY_MASK),
+		.flags	  = 0,
+		.curpage  = 0,
+	};
+	unsigned int level;
+	int ret;
+
+	ret = __change_page_attr_set_clr(&cpa, 1);
+	if (ret) {
+		if (need_flush_all)
+			*need_flush_all = true;
+		return ret;
+	}
+
+	if (need_flush_all) {
+		pte_t *pte = lookup_address(addr, &level);
+
+		if (cpa.force_flush_all || !pte ||
+		    page_level_size(level) < ((unsigned long)numpages << PAGE_SHIFT))
+			*need_flush_all = true;
+	}
+	return 0;
+}
+
+/*
  * __set_memory_enc_pgtable() is used for the hypervisors that get
  * informed about "encryption" status via page tables.
  */
