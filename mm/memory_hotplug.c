@@ -826,6 +826,8 @@ static struct zone *default_kernel_zone_for_pfn(int nid, unsigned long start_pfn
 	for (zid = 0; zid < ZONE_NORMAL; zid++) {
 		struct zone *zone = &pgdat->node_zones[zid];
 
+		if (zone_is_pks(zone))
+			continue;
 		if (zone_intersects(zone, start_pfn, nr_pages))
 			return zone;
 	}
@@ -1735,8 +1737,11 @@ static void node_states_check_changes_offline(unsigned long nr_pages,
 	 * thus we can determine that we need to clear the node from
 	 * node_states[N_NORMAL_MEMORY].
 	 */
-	for (zt = 0; zt <= ZONE_NORMAL; zt++)
+	for (zt = 0; zt <= ZONE_NORMAL; zt++) {
+		if (zone_is_pks(&pgdat->node_zones[zt]))
+			continue;
 		present_pages += pgdat->node_zones[zt].present_pages;
+	}
 	if (zone_idx(zone) <= ZONE_NORMAL && nr_pages >= present_pages)
 		arg->status_change_nid_normal = zone_to_nid(zone);
 
@@ -1819,8 +1824,8 @@ int __ref offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	 * checked by calling code. This is just a sanity check that we might
 	 * want to remove in the future.
 	 */
-	if (WARN_ON_ONCE(page_zone(pfn_to_page(start_pfn)) != zone ||
-			 page_zone(pfn_to_page(end_pfn - 1)) != zone)) {
+	if (page_zone(pfn_to_page(start_pfn)) != zone ||
+	    page_zone(pfn_to_page(end_pfn - 1)) != zone) {
 		ret = -EINVAL;
 		reason = "multizone range";
 		goto failed_removal;

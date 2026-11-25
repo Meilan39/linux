@@ -619,6 +619,13 @@ static unsigned long isolate_freepages_block(struct compact_control *cc,
 				goto isolate_fail;
 		}
 
+		/*
+		 * The pageblock may have changed zones before we acquired
+		 * cc->zone->lock. Once free here under the lock it cannot leave.
+		 */
+		if (unlikely(page_zone(page) != cc->zone))
+			goto isolate_fail;
+
 		/* Found a free page, will break it into order-0 pages */
 		order = buddy_order(page);
 		isolated = __isolate_free_page(page, order);
@@ -973,6 +980,10 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 				low_pfn += (1UL << order) - 1;
 			goto isolate_fail;
 		}
+
+		/* Skip pageblocks that moved to another zone while scanning. */
+		if (unlikely(page_zone(page) != cc->zone))
+			goto isolate_fail;
 
 		/*
 		 * Check may be lockless but that's ok as we recheck later.
@@ -2858,6 +2869,8 @@ static void kcompactd_do_work(pg_data_t *pgdat)
 
 		zone = &pgdat->node_zones[zoneid];
 		if (!populated_zone(zone))
+			continue;
+		if (zone_is_pks(zone) && zone_idx(zone) != cc.highest_zoneidx)
 			continue;
 
 		if (compaction_deferred(zone, cc.order))

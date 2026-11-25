@@ -24,6 +24,15 @@ static int set_migratetype_isolate(struct page *page, int migratetype, int isol_
 	spin_lock_irqsave(&zone->lock, flags);
 
 	/*
+	 * A free pageblock may have moved zones before we acquired zone->lock,
+	 * and ZONE_PKS blocks may not be isolated for offlining or contig use.
+	 */
+	if (page_zone(page) != zone || zone_is_pks(zone)) {
+		spin_unlock_irqrestore(&zone->lock, flags);
+		return -EBUSY;
+	}
+
+	/*
 	 * We assume the caller intended to SET migrate type to isolate.
 	 * If it is already set, then someone else must have raced and
 	 * set it before us.

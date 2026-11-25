@@ -70,13 +70,14 @@ atomic_long_t num_poisoned_pages __read_mostly = ATOMIC_LONG_INIT(0);
 
 static bool __page_handle_poison(struct page *page)
 {
+	struct zone *zone = page_zone(page);
 	int ret;
 
-	zone_pcp_disable(page_zone(page));
+	zone_pcp_disable(zone);
 	ret = dissolve_free_huge_page(page);
 	if (!ret)
 		ret = take_page_off_buddy(page);
-	zone_pcp_enable(page_zone(page));
+	zone_pcp_enable(zone);
 
 	return ret > 0;
 }
@@ -1329,14 +1330,15 @@ static int __get_unpoison_page(struct page *page)
  */
 static int get_hwpoison_page(struct page *p, unsigned long flags)
 {
+	struct zone *zone = page_zone(p);
 	int ret;
 
-	zone_pcp_disable(page_zone(p));
+	zone_pcp_disable(zone);
 	if (flags & MF_UNPOISON)
 		ret = __get_unpoison_page(p);
 	else
 		ret = get_any_page(p, flags);
-	zone_pcp_enable(page_zone(p));
+	zone_pcp_enable(zone);
 
 	return ret;
 }
