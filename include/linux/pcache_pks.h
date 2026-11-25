@@ -39,6 +39,7 @@ enum pcache_pks_site {
 	PKS_SITE_WRITEBACK_ZERO,	/* page:  tail of last page at writeback */
 	PKS_SITE_READ_ZERO,		/* fill:  holes of page being read in */
 	PKS_SITE_LOOP_FILL,		/* fill:  loop read request */
+	PKS_SITE_MIGRATE,		/* fill:  folio_migrate_copy() in ZONE_PKS */
 	PKS_NR_SITES,
 };
 
@@ -248,6 +249,7 @@ static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope)
 struct pt_regs;
 bool pcache_pks_fault_callback(struct pt_regs *regs, unsigned long address,
 			       bool write);
+void pcache_pks_copy_folio(struct folio *dst, struct folio *src);
 
 static inline bool pcache_pks_file(const struct file *file)
 {
@@ -347,6 +349,7 @@ static inline void pcache_pks_scope_begin_fill(struct pcache_pks_scope *scope,
 static inline void pcache_pks_scope_clamp(struct pcache_pks_scope *scope) {}
 static inline void pcache_pks_scope_end(struct pcache_pks_scope *scope) {}
 static inline void pcache_pks_check_user_return(void) {}
+#define pcache_pks_copy_folio(dst, src) folio_copy(dst, src)
 
 #endif /* CONFIG_PCACHE_PKS */
 

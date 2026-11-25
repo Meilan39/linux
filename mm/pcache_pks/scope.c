@@ -6,6 +6,8 @@
 
 #include <linux/cpumask.h>
 #include <linux/export.h>
+#include <linux/highmem.h>
+#include <linux/pagemap.h>
 #include <linux/pcache_pks.h>
 #include <linux/percpu.h>
 #include <linux/printk.h>
@@ -25,6 +27,7 @@ const char * const pks_site_names[PKS_NR_SITES] = {
 	[PKS_SITE_WRITEBACK_ZERO]	= "writeback_zero",
 	[PKS_SITE_READ_ZERO]		= "read_zero",
 	[PKS_SITE_LOOP_FILL]		= "loop_fill",
+	[PKS_SITE_MIGRATE]		= "migrate",
 };
 
 /* Scopes opened at @site since boot. */
@@ -61,3 +64,35 @@ void pcache_pks_grant_refused(enum pcache_pks_site site)
 			    name, current->comm, current->pid);
 }
 EXPORT_SYMBOL_GPL(pcache_pks_grant_refused);
+
+/* Copy @src to @dst, as folio_copy() does, for folio_migrate_copy(). */
+void pcache_pks_copy_folio(struct folio *dst, struct folio *src)
+{
+	DEFINE_PCACHE_PKS_SCOPE(scope);
+	long i, nr = folio_nr_pages(dst);
+
+	if (likely(!pcache_pks_page(&dst->page))) {
+		folio_copy(dst, src);
+		return;
+	}
+
+	/* folio_migrate_mapping() has returned -EBUSY for these */
+	if (WARN_ON_ONCE(folio_nr_pages(src) != nr || !folio_test_locked(src) ||
+			 !pcache_pks_page_fillable(&dst->page))) {
+		pcache_pks_grant_refused(PKS_SITE_MIGRATE);
+		return;
+	}
+
+	__pcache_pks_scope_open(&scope, PKS_SITE_MIGRATE);
+	for (i = 0; i < nr; i++) {
+		struct page *to = folio_page(dst, i);
+		struct page *from = folio_page(src, i);
+		void *vto = kmap_local_page(to);
+		void *vfrom = kmap_local_page(from);
+
+		copy_page(pcache_pks_waddr(to, vto), vfrom);
+		kunmap_local(vfrom);
+		kunmap_local(vto);
+	}
+	pcache_pks_scope_end(&scope);
+}

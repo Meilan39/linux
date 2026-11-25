@@ -102,6 +102,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/printk.h>
 #include <linux/swapops.h>
+#include <linux/pcache_pks_page.h>
 
 #include <asm/tlbflush.h>
 #include <linux/uaccess.h>
@@ -1210,6 +1211,8 @@ static struct page *new_page(struct page *page, unsigned long start)
 
 	if (folio_test_large(src))
 		gfp = GFP_TRANSHUGE;
+	if (unlikely(pcache_pks_page(&src->page)))
+		gfp |= __GFP_PKS;
 
 	/*
 	 * if !vma, vma_alloc_folio() will use task or system default policy

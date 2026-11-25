@@ -18,7 +18,7 @@
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/pagemap.h>
-#include <linux/pcache_pks_page.h>
+#include <linux/pcache_pks.h>
 #include <linux/buffer_head.h>
 #include <linux/mm_inline.h>
 #include <linux/nsproxy.h>
@@ -358,12 +358,11 @@ int folio_migrate_mapping(struct address_space *mapping,
 	int expected_count = expected_page_refs(mapping, &folio->page) + extra_count;
 	long nr = folio_nr_pages(folio);
 
-	/* Temporary refusal before intra-zone migration is added cleanly. */
-	if (pcache_pks_page(&folio->page))
-		return -EBUSY;
-
 	if (!mapping) {
 		/* Anonymous page without mapping */
+		if (unlikely(pcache_pks_page(&newfolio->page) ||
+			     pcache_pks_page(&folio->page)))
+			return -EBUSY;
 		if (folio_ref_count(folio) != expected_count)
 			return -EAGAIN;
 
@@ -378,6 +377,15 @@ int folio_migrate_mapping(struct address_space *mapping,
 
 	oldzone = folio_zone(folio);
 	newzone = folio_zone(newfolio);
+
+	if (unlikely(!pcache_pks_folio_fits(mapping, newfolio) ||
+		     !pcache_pks_folio_fits(mapping, folio)))
+		return -EBUSY;
+	if (pcache_pks_page(&newfolio->page) &&
+	    unlikely(folio_nr_pages(newfolio) != nr ||
+		     !folio_test_locked(folio) ||
+		     !pcache_pks_page_fillable(&newfolio->page)))
+		return -EBUSY;
 
 	xas_lock_irq(&xas);
 	if (!folio_ref_freeze(folio, expected_count)) {
@@ -578,7 +586,7 @@ EXPORT_SYMBOL(folio_migrate_flags);
 
 void folio_migrate_copy(struct folio *newfolio, struct folio *folio)
 {
-	folio_copy(newfolio, folio);
+	pcache_pks_copy_folio(newfolio, folio);
 	folio_migrate_flags(newfolio, folio);
 }
 EXPORT_SYMBOL(folio_migrate_copy);
@@ -602,6 +610,9 @@ int migrate_page(struct address_space *mapping,
 	int rc;
 
 	BUG_ON(folio_test_writeback(folio));	/* Writeback must be complete */
+
+	if (unlikely(mode == MIGRATE_SYNC_NO_COPY && pcache_pks_page(page)))
+		return -EBUSY;
 
 	rc = folio_migrate_mapping(mapping, newfolio, folio, 0);
 
@@ -662,6 +673,9 @@ static int __buffer_migrate_page(struct address_space *mapping,
 	struct buffer_head *bh, *head;
 	int rc;
 	int expected_count;
+
+	if (unlikely(mode == MIGRATE_SYNC_NO_COPY && pcache_pks_page(page)))
+		return -EBUSY;
 
 	if (!page_has_buffers(page))
 		return migrate_page(mapping, newpage, page, mode);
@@ -1558,6 +1572,8 @@ struct page *alloc_migration_target(struct page *page, unsigned long private)
 	zidx = zone_idx(folio_zone(folio));
 	if (is_highmem_idx(zidx) || zidx == ZONE_MOVABLE)
 		gfp_mask |= __GFP_HIGHMEM;
+	if (unlikely(pcache_pks_page(&folio->page)))
+		gfp_mask = (gfp_mask & ~(__GFP_DMA | __GFP_DMA32)) | __GFP_PKS;
 
 	new_folio = __folio_alloc(gfp_mask, order, nid, mtc->nmask);
 
@@ -2013,6 +2029,9 @@ static struct page *alloc_misplaced_dst_page(struct page *page,
 			__GFP_NOWARN;
 		gfp &= ~__GFP_RECLAIM;
 	}
+	/* For ZONE_PKS, waking kswapd means refilling the zone */
+	if (unlikely(pcache_pks_page(page)))
+		gfp |= __GFP_PKS | __GFP_KSWAPD_RECLAIM;
 	new = __folio_alloc_node(gfp, order, nid);
 
 	return &new->page;
