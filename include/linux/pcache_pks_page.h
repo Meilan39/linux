@@ -1,0 +1,69 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _LINUX_PCACHE_PKS_PAGE_H
+#define _LINUX_PCACHE_PKS_PAGE_H
+
+/*
+ * Page-level tests of the protected page cache. Kept small so low-level
+ * headers such as <linux/highmem.h> can include it; the rest of the interface
+ * is in <linux/pcache_pks.h>.
+ */
+#include <linux/jump_label.h>
+
+#ifdef CONFIG_PCACHE_PKS
+
+#include <linux/mm.h>
+
+DECLARE_STATIC_KEY_FALSE(pcache_pks_enabled);
+extern unsigned long pcache_pks_alias_delta;
+
+/* Is page-cache protection active on this boot? */
+static inline bool pcache_pks_is_enabled(void)
+{
+	return static_branch_unlikely(&pcache_pks_enabled);
+}
+
+/*
+ * Is @page protected? Every page whose zone is ZONE_PKS carries
+ * PKS_KEY_PAGE_CACHE in the direct map on every CPU and has a write alias:
+ * blocks enter ZONE_PKS only after tagging and flushing, and leave it before
+ * keys are cleared. While a caller holds a reference the answer is stable.
+ */
+static inline bool pcache_pks_page(const struct page *page)
+{
+	return pcache_pks_is_enabled() && page_zonenum(page) == ZONE_PKS;
+}
+
+/*
+ * Return the address through which granted write paths store into @page.
+ * @kaddr is a direct-map address for @page, such as kmap_local_page() returns.
+ * For protected pages this selects the write alias; for others it is @kaddr.
+ */
+static inline void *pcache_pks_waddr(const struct page *page, void *kaddr)
+{
+	if (unlikely(pcache_pks_page(page)))
+		return kaddr + pcache_pks_alias_delta;
+	return kaddr;
+}
+
+#else /* !CONFIG_PCACHE_PKS */
+
+struct page;
+
+static inline bool pcache_pks_is_enabled(void)
+{
+	return false;
+}
+
+static inline bool pcache_pks_page(const struct page *page)
+{
+	return false;
+}
+
+static inline void *pcache_pks_waddr(const struct page *page, void *kaddr)
+{
+	return kaddr;
+}
+
+#endif /* CONFIG_PCACHE_PKS */
+
+#endif /* _LINUX_PCACHE_PKS_PAGE_H */
