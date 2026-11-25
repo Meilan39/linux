@@ -797,6 +797,30 @@ config ZONE_DEVICE
 
 	  If FS_DAX is enabled, then say Y.
 
+config PCACHE_PKS
+	bool "Write-protect the page cache of selected files with PKS (EXPERIMENTAL)"
+	depends on X86_64 && ARCH_HAS_SUPERVISOR_PKEYS
+	# ZONE_PKS must not be zone 0, which a zeroed struct page names
+	depends on ZONE_DMA
+	depends on !HIBERNATION
+	depends on !READ_ONLY_THP_FOR_FS
+	depends on !KASAN
+	select ARCH_ENABLE_PKS_CONSUMER
+	select INSTRUCTION_DECODER
+	help
+	  Protect the page cache of files on mounts with the pks_pagecache
+	  option by keeping their pages in a dynamic protection-domain zone
+	  (ZONE_PKS) whose direct-map leaf is tagged with a write-disabled
+	  supervisor protection key. Write access is granted only through a
+	  write alias within conditioned write scopes, so stray kernel stores
+	  through the direct map fault.
+
+	  Incompatible with hibernation (PKS state is not saved across S4),
+	  READ_ONLY_THP_FOR_FS (writes page cache directly), and KASAN (writes
+	  freed pages through the direct map).
+
+	  If unsure, say N.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN

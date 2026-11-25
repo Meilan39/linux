@@ -43,6 +43,7 @@
 #include <linux/vmalloc.h>
 #include <linux/vmstat.h>
 #include <linux/mempolicy.h>
+#include <linux/pcache_pks_page.h>
 #include <linux/memremap.h>
 #include <linux/stop_machine.h>
 #include <linux/random.h>
@@ -1770,6 +1771,10 @@ void set_zone_contiguous(struct zone *zone)
 {
 	unsigned long block_start_pfn = zone->zone_start_pfn;
 	unsigned long block_end_pfn;
+
+	/* Pageblocks move dynamically between node zones when PKS is active. */
+	if (pcache_pks_is_enabled())
+		return;
 
 	block_end_pfn = ALIGN(block_start_pfn + 1, pageblock_nr_pages);
 	for (; block_start_pfn < zone_end_pfn(zone);

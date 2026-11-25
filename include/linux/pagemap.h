@@ -316,6 +316,16 @@ static inline bool mapping_large_folio_support(struct address_space *mapping)
 		test_bit(AS_LARGE_FOLIO_SUPPORT, &mapping->flags);
 }
 
+static inline void mapping_set_pks_protected(struct address_space *mapping)
+{
+	mapping->gfp_mask |= __GFP_PKS;
+}
+
+static inline bool mapping_pks_protected(const struct address_space *mapping)
+{
+	return mapping->gfp_mask & __GFP_PKS;
+}
+
 static inline int filemap_nr_thps(struct address_space *mapping)
 {
 #ifdef CONFIG_READ_ONLY_THP_FOR_FS
