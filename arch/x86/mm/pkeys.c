@@ -380,13 +380,18 @@ void x86_pkrs_load(struct thread_struct *thread)
  */
 void pks_save_pt_regs(struct pt_regs *regs)
 {
-	struct pt_regs_auxiliary *aux_pt_regs;
+	struct pt_regs_auxiliary *aux_pt_regs = &to_extended_pt_regs(regs)->aux;
+
+	/*
+	 * Save before testing the feature. Boot patches alternatives with
+	 * interrupts enabled, so the test below can still read false when the
+	 * one in pks_restore_pt_regs() reads true.
+	 */
+	aux_pt_regs->pkrs = current->thread.pkrs;
 
 	if (!cpu_feature_enabled(X86_FEATURE_PKS))
 		return;
 
-	aux_pt_regs = &to_extended_pt_regs(regs)->aux;
-	aux_pt_regs->pkrs = current->thread.pkrs;
 	current->thread.pkrs = PKS_INIT_VALUE;
 	pks_write_pkrs(PKS_INIT_VALUE);
 }
