@@ -1211,7 +1211,7 @@ static struct page *new_page(struct page *page, unsigned long start)
 
 	if (folio_test_large(src))
 		gfp = GFP_TRANSHUGE;
-	if (unlikely(pcache_pks_page(&src->page)))
+	if (unlikely(pcache_pks_zone_page(&src->page)))
 		gfp |= __GFP_PKS;
 
 	/*

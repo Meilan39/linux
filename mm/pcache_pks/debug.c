@@ -98,10 +98,14 @@ static int pks_status_show(struct seq_file *m, void *v)
 	unsigned int cpu;
 	int i;
 
-	pks_zone_info(&info);
+	pks_place_info(&info);
 	scopes = pks_scope_total();
 
 	seq_printf(m, "enabled:             %d\n", pcache_pks_is_enabled());
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	seq_printf(m, "placement:           %s\n", pks_place_name());
+	seq_printf(m, "untag_pending:       %lu\n", info.pending_pages);
+#endif
 	seq_printf(m, "zone_blocks:         %lu\n",
 		   info.tagged_pages >> pageblock_order);
 	seq_printf(m, "zone_tagged_pages:   %lu\n", info.tagged_pages);

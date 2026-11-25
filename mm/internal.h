@@ -92,6 +92,12 @@ static inline void pks_zone_wake(struct zone *zone) {}
 static inline void pks_update_zone_wmarks(struct zone *zone) {}
 #endif
 
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+bool pks_static_placement(void);
+#else
+static inline bool pks_static_placement(void) { return false; }
+#endif
+
 void page_cache_ra_order(struct readahead_control *, struct file_ra_state *,
 		unsigned int order);
 void force_page_cache_ra(struct readahead_control *, unsigned long nr);
