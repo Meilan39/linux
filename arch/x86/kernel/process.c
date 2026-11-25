@@ -26,6 +26,7 @@
 #include <linux/elf-randomize.h>
 #include <trace/events/power.h>
 #include <linux/hw_breakpoint.h>
+#include <linux/pks-keys.h>
 #include <asm/cpu.h>
 #include <asm/apic.h>
 #include <linux/uaccess.h>
@@ -148,6 +149,10 @@ int copy_thread(unsigned long clone_flags, unsigned long sp, unsigned long arg,
 	p->thread.io_bitmap = NULL;
 	p->thread.iopl_warn = 0;
 	memset(p->thread.ptrace_bps, 0, sizeof(p->thread.ptrace_bps));
+#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
+	/* Key access that the parent has opened is the parent's alone */
+	p->thread.pkrs = PKS_INIT_VALUE;
+#endif
 
 #ifdef CONFIG_X86_64
 	current_save_fsgs();
