@@ -8,6 +8,7 @@
 #include <linux/livepatch.h>
 #include <linux/audit.h>
 #include <linux/tick.h>
+#include <linux/pcache_pks.h>
 
 #include "common.h"
 
@@ -201,6 +202,9 @@ static void exit_to_user_mode_prepare(struct pt_regs *regs)
 		ti_work = exit_to_user_mode_loop(regs, ti_work);
 
 	arch_exit_to_user_mode_prepare(regs, ti_work);
+
+	/* A page-cache write scope must not survive into user mode. */
+	pcache_pks_check_user_return();
 
 	/* Ensure that the address limit is intact and no locks are held */
 	addr_limit_user_check();
