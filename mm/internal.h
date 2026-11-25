@@ -33,7 +33,7 @@ struct folio_batch;
 #define GFP_CONSTRAINT_MASK (__GFP_HARDWALL|__GFP_THISNODE)
 
 /* Do not use these with a slab allocator */
-#define GFP_SLAB_BUG_MASK (__GFP_DMA32|__GFP_HIGHMEM|~__GFP_BITS_MASK)
+#define GFP_SLAB_BUG_MASK (__GFP_DMA32|__GFP_HIGHMEM|__GFP_PKS|~__GFP_BITS_MASK)
 
 void page_writeback_init(void);
 
@@ -78,6 +78,19 @@ void unmap_page_range(struct mmu_gather *tlb,
 			     struct vm_area_struct *vma,
 			     unsigned long addr, unsigned long end,
 			     struct zap_details *details);
+
+#ifdef CONFIG_PCACHE_PKS
+bool pks_zone_grow(struct zone *zone, gfp_t gfp);
+void pks_zone_wake(struct zone *zone);
+void pks_update_zone_wmarks(struct zone *zone);
+#else
+static inline bool pks_zone_grow(struct zone *zone, gfp_t gfp)
+{
+	return false;
+}
+static inline void pks_zone_wake(struct zone *zone) {}
+static inline void pks_update_zone_wmarks(struct zone *zone) {}
+#endif
 
 void page_cache_ra_order(struct readahead_control *, struct file_ra_state *,
 		unsigned int order);
