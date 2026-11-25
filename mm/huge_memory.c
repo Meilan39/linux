@@ -25,6 +25,7 @@
 #include <linux/mman.h>
 #include <linux/memremap.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks_page.h>
 #include <linux/debugfs.h>
 #include <linux/migrate.h>
 #include <linux/hashtable.h>
@@ -1378,6 +1379,9 @@ struct page *follow_trans_huge_pmd(struct vm_area_struct *vma,
 
 	page = pmd_page(*pmd);
 	VM_BUG_ON_PAGE(!PageHead(page) && !is_zone_device_page(page), page);
+
+	if (unlikely((flags & FOLL_WRITE) && pcache_pks_page(page)))
+		return ERR_PTR(-EFAULT);
 
 	if (!try_grab_page(page, flags))
 		return ERR_PTR(-ENOMEM);

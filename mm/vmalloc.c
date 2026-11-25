@@ -39,6 +39,7 @@
 #include <linux/pgtable.h>
 #include <linux/uaccess.h>
 #include <linux/hugetlb.h>
+#include <linux/pcache_pks_page.h>
 #include <linux/sched/mm.h>
 #include <asm/tlbflush.h>
 #include <asm/shmparam.h>
@@ -581,6 +582,17 @@ int vmap_pages_range_noflush(unsigned long addr, unsigned long end,
 	unsigned int i, nr = (end - addr) >> PAGE_SHIFT;
 
 	WARN_ON(page_shift < PAGE_SHIFT);
+
+	/*
+	 * Protected pages have only the tagged direct map and write alias;
+	 * refuse extra kernel mappings that would lack protection keys.
+	 */
+	if (pcache_pks_is_enabled()) {
+		for (i = 0; i < nr; i++) {
+			if (unlikely(pcache_pks_page(pages[i])))
+				return -EPERM;
+		}
+	}
 
 	if (!IS_ENABLED(CONFIG_HAVE_ARCH_HUGE_VMALLOC) ||
 			page_shift == PAGE_SHIFT)
