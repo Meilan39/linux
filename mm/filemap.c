@@ -42,6 +42,7 @@
 #include <linux/ramfs.h>
 #include <linux/page_idle.h>
 #include <linux/migrate.h>
+#include <linux/pcache_pks.h>
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -814,6 +815,7 @@ void replace_page_cache_page(struct page *old, struct page *new)
 	VM_BUG_ON_PAGE(!PageLocked(old), old);
 	VM_BUG_ON_PAGE(!PageLocked(new), new);
 	VM_BUG_ON_PAGE(new->mapping, new);
+	BUG_ON(!pcache_pks_folio_fits(mapping, fnew));
 
 	get_page(new);
 	new->mapping = mapping;
@@ -851,6 +853,8 @@ noinline int __filemap_add_folio(struct address_space *mapping,
 
 	VM_BUG_ON_FOLIO(!folio_test_locked(folio), folio);
 	VM_BUG_ON_FOLIO(folio_test_swapbacked(folio), folio);
+	if (unlikely(!pcache_pks_folio_fits(mapping, folio)))
+		return -EPERM;
 	mapping_set_update(&xas, mapping);
 
 	if (!huge) {
@@ -3152,6 +3156,8 @@ retry_find:
 			if (fpin)
 				goto out_retry;
 			filemap_invalidate_unlock_shared(mapping);
+			if (pcache_pks_mapping(mapping))
+				return VM_FAULT_SIGBUS;
 			return VM_FAULT_OOM;
 		}
 	}

@@ -18,6 +18,7 @@
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/pagemap.h>
+#include <linux/pcache_pks_page.h>
 #include <linux/buffer_head.h>
 #include <linux/mm_inline.h>
 #include <linux/nsproxy.h>
@@ -356,6 +357,10 @@ int folio_migrate_mapping(struct address_space *mapping,
 	int dirty;
 	int expected_count = expected_page_refs(mapping, &folio->page) + extra_count;
 	long nr = folio_nr_pages(folio);
+
+	/* Temporary refusal before intra-zone migration is added cleanly. */
+	if (pcache_pks_page(&folio->page))
+		return -EBUSY;
 
 	if (!mapping) {
 		/* Anonymous page without mapping */
