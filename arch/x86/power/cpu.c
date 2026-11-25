@@ -25,6 +25,7 @@
 #include <asm/cpu.h>
 #include <asm/mmu_context.h>
 #include <asm/cpu_device_id.h>
+#include <asm/pks.h>
 
 #ifdef CONFIG_X86_32
 __visible unsigned long saved_context_ebx;
@@ -206,6 +207,7 @@ static void notrace __restore_processor_state(struct saved_context *ctxt)
 #else
 /* CONFIG X86_64 */
 	wrmsrl(MSR_EFER, ctxt->efer);
+	pks_resume_early();
 	__write_cr4(ctxt->cr4);
 #endif
 	write_cr3(ctxt->cr3);
@@ -232,6 +234,7 @@ static void notrace __restore_processor_state(struct saved_context *ctxt)
 #else
 	loadsegment(fs, __KERNEL_PERCPU);
 #endif
+	pks_resume();
 
 	/* Restore the TSS, RO GDT, LDT, and usermode-relevant MSRs. */
 	fix_processor_context();

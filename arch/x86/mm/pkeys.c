@@ -434,6 +434,30 @@ void pks_setup(void)
 	cr4_set_bits(X86_CR4_PKS);
 }
 
+/* Initialize IA32_PKRS from reset state before CR4.PKS is turned back on. */
+void notrace pks_resume_early(void)
+{
+	if (!cpu_feature_enabled(X86_FEATURE_PKS))
+		return;
+
+	wrmsrl(MSR_IA32_PKRS, PKS_INIT_VALUE);
+}
+
+/* Synchronize pkrs_cache and current->thread.pkrs once percpu GS is ready. */
+void notrace pks_resume(void)
+{
+	if (!cpu_feature_enabled(X86_FEATURE_PKS))
+		return;
+
+	/*
+	 * Suspend cleared IA32_PKRS in hardware while pkrs_cache kept its
+	 * pre-suspend value; invalidate the cache so pks_write_pkrs() writes
+	 * the MSR unconditionally.
+	 */
+	__this_cpu_write(pkrs_cache, PKS_CACHE_INVALID);
+	pks_write_pkrs(current->thread.pkrs);
+}
+
 static u8 __pks_update_protection(u8 pkey, u8 protection)
 {
 	u32 pkrs;
