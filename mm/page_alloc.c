@@ -3431,6 +3431,14 @@ void free_unref_page(struct page *page, unsigned int order)
 	unsigned long pfn = page_to_pfn(page);
 	int migratetype;
 
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	if (static_branch_unlikely(&pcache_pks_per_page) && !order &&
+	    unlikely(pks_naive_is_page(pfn))) {
+		pks_naive_free(page);
+		return;
+	}
+#endif
+
 	if (!free_unref_page_prepare(page, pfn, order))
 		return;
 
@@ -3468,6 +3476,14 @@ void free_unref_page_list(struct list_head *list)
 	/* Prepare pages for freeing */
 	list_for_each_entry_safe(page, next, list, lru) {
 		unsigned long pfn = page_to_pfn(page);
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+		if (static_branch_unlikely(&pcache_pks_per_page) &&
+		    unlikely(pks_naive_is_page(pfn))) {
+			list_del(&page->lru);
+			pks_naive_free(page);
+			continue;
+		}
+#endif
 		if (!free_unref_page_prepare(page, pfn, 0)) {
 			list_del(&page->lru);
 			continue;
@@ -5108,6 +5124,14 @@ retry:
 	if (costly_order && !(gfp_mask & __GFP_RETRY_MAYFAIL))
 		goto nopage;
 
+	/*
+	 * A static ZONE_PKS cannot grow, and kswapd, which makes reclaimers
+	 * wait for writeback elsewhere, leaves it alone. Wait here.
+	 */
+	if ((gfp_mask & __GFP_PKS) && pks_static_placement())
+		reclaim_throttle(ac->preferred_zoneref->zone->zone_pgdat,
+				 VMSCAN_THROTTLE_WRITEBACK);
+
 	if (should_reclaim_retry(gfp_mask, order, ac, alloc_flags,
 				 did_some_progress > 0, &no_progress_loops))
 		goto retry;
@@ -5440,6 +5464,12 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 	 * movable zones are not used during allocation.
 	 */
 	gfp = current_gfp_context(gfp);
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	if (static_branch_unlikely(&pcache_pks_per_page) &&
+	    unlikely(gfp & __GFP_PKS))
+		return order ? NULL : pks_naive_alloc(gfp, preferred_nid,
+						      nodemask);
+#endif
 	alloc_gfp = gfp;
 	if (!prepare_alloc_pages(gfp, order, preferred_nid, nodemask, &ac,
 			&alloc_gfp, &alloc_flags))

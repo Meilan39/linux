@@ -1572,7 +1572,7 @@ struct page *alloc_migration_target(struct page *page, unsigned long private)
 	zidx = zone_idx(folio_zone(folio));
 	if (is_highmem_idx(zidx) || zidx == ZONE_MOVABLE)
 		gfp_mask |= __GFP_HIGHMEM;
-	if (unlikely(pcache_pks_page(&folio->page)))
+	if (unlikely(pcache_pks_zone_page(&folio->page)))
 		gfp_mask = (gfp_mask & ~(__GFP_DMA | __GFP_DMA32)) | __GFP_PKS;
 
 	new_folio = __folio_alloc(gfp_mask, order, nid, mtc->nmask);
@@ -2030,7 +2030,7 @@ static struct page *alloc_misplaced_dst_page(struct page *page,
 		gfp &= ~__GFP_RECLAIM;
 	}
 	/* For ZONE_PKS, waking kswapd means refilling the zone */
-	if (unlikely(pcache_pks_page(page)))
+	if (unlikely(pcache_pks_zone_page(page)))
 		gfp |= __GFP_PKS | __GFP_KSWAPD_RECLAIM;
 	new = __folio_alloc_node(gfp, order, nid);
 

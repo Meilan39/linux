@@ -833,6 +833,22 @@ config PCACHE_PKS_DEBUG
 
 	  If unsure, say N.
 
+config PCACHE_PKS_BASELINES
+	bool "Baseline placements for evaluating the PKS page-cache protection"
+	depends on PCACHE_PKS
+	help
+	  Build static upfront ZONE_PKS preallocation and per-page naive
+	  tagging baselines alongside the dynamic ZONE_PKS manager, and
+	  select one at boot with pcache_pks.placement=:
+
+	    dynamic  default on-demand ZONE_PKS block promotion/demotion
+	    static   preallocate pcache_pks.reserve=<size> into ZONE_PKS at
+	             boot with runtime growth and shrinking disabled
+	    naive    per-page tagging on every page-cache allocation and
+	             batched deferred untagging on free
+
+	  If unsure, say N.
+
 config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN

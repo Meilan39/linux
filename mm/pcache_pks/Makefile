@@ -1,3 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0
 obj-y += core.o zone.o alias.o scope.o fault.o
 obj-$(CONFIG_PCACHE_PKS_DEBUG) += debug.o
+obj-$(CONFIG_PCACHE_PKS_BASELINES) += naive.o
