@@ -339,6 +339,13 @@ bool pks_handle_key_fault(struct pt_regs *regs, unsigned long hw_error_code,
  *     until all prior executions of WRPKRU have completed execution
  *     and updated the PKRU register.
  */
+/*
+ * Sentinel value written to pkrs_cache while updating MSR_IA32_PKRS so that
+ * any interrupt or NMI arriving before WRMSR completes sees a mismatch and
+ * writes PKS_INIT_VALUE into hardware (key 0 is always 00, so ~0U is invalid).
+ */
+#define PKS_CACHE_INVALID	(~0U)
+
 static inline void pks_write_pkrs(u32 new_pkrs)
 {
 	u32 pkrs = __this_cpu_read(pkrs_cache);
@@ -346,8 +353,11 @@ static inline void pks_write_pkrs(u32 new_pkrs)
 	lockdep_assert_preemption_disabled();
 
 	if (pkrs != new_pkrs) {
-		__this_cpu_write(pkrs_cache, new_pkrs);
+		__this_cpu_write(pkrs_cache, PKS_CACHE_INVALID);
+		barrier();
 		wrmsrl(MSR_IA32_PKRS, new_pkrs);
+		barrier();
+		__this_cpu_write(pkrs_cache, new_pkrs);
 	}
 }
 
