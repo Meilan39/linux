@@ -49,6 +49,7 @@
 #include <linux/prefetch.h>
 #include <linux/printk.h>
 #include <linux/dax.h>
+#include <linux/pcache_pks.h>
 #include <linux/psi.h>
 
 #include <asm/tlbflush.h>
@@ -3500,9 +3501,13 @@ static unsigned long do_try_to_free_pages(struct zonelist *zonelist,
 					  struct scan_control *sc)
 {
 	int initial_priority = sc->priority;
+	DEFINE_PCACHE_PKS_SCOPE(pks_scope);
+	unsigned long ret = 0;
 	pg_data_t *last_pgdat;
 	struct zoneref *z;
 	struct zone *zone;
+
+	pcache_pks_scope_clamp(&pks_scope);
 retry:
 	delayacct_freepages_start();
 
@@ -3549,12 +3554,16 @@ retry:
 
 	delayacct_freepages_end();
 
-	if (sc->nr_reclaimed)
-		return sc->nr_reclaimed;
+	if (sc->nr_reclaimed) {
+		ret = sc->nr_reclaimed;
+		goto out;
+	}
 
 	/* Aborted reclaim to try compaction? don't OOM, then */
-	if (sc->compaction_ready)
-		return 1;
+	if (sc->compaction_ready) {
+		ret = 1;
+		goto out;
+	}
 
 	/*
 	 * We make inactive:active ratio decisions based on the node's
@@ -3581,7 +3590,9 @@ retry:
 		goto retry;
 	}
 
-	return 0;
+out:
+	pcache_pks_scope_end(&pks_scope);
+	return ret;
 }
 
 static bool allow_direct_reclaim(pg_data_t *pgdat)
@@ -4693,6 +4704,7 @@ static int __node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned in
 		.reclaim_idx = gfp_reclaim_zone(gfp_mask),
 	};
 	unsigned long pflags;
+	DEFINE_PCACHE_PKS_SCOPE(pks_scope);
 
 	trace_mm_vmscan_node_reclaim_begin(pgdat->node_id, order,
 					   sc.gfp_mask);
@@ -4700,6 +4712,7 @@ static int __node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned in
 	cond_resched();
 	psi_memstall_enter(&pflags);
 	fs_reclaim_acquire(sc.gfp_mask);
+	pcache_pks_scope_clamp(&pks_scope);
 	/*
 	 * We need to be able to allocate from the reserves for RECLAIM_UNMAP
 	 */
@@ -4718,6 +4731,7 @@ static int __node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned in
 
 	set_task_reclaim_state(p, NULL);
 	memalloc_noreclaim_restore(noreclaim_flag);
+	pcache_pks_scope_end(&pks_scope);
 	fs_reclaim_release(sc.gfp_mask);
 	psi_memstall_leave(&pflags);
 

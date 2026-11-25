@@ -43,6 +43,7 @@
 #include <linux/writeback.h>
 #include <linux/backing-dev.h>
 #include <linux/pagevec.h>
+#include <linux/pcache_pks.h>
 
 #include "ext4.h"
 
@@ -303,8 +304,9 @@ int ext4_mpage_readpages(struct inode *inode,
 				if (ext4_map_blocks(NULL, inode, &map, 0) < 0) {
 				set_error_page:
 					SetPageError(page);
-					zero_user_segment(page, 0,
-							  PAGE_SIZE);
+					pcache_pks_zero_user_segment(page, 0,
+						PAGE_SIZE, PKS_SITE_READ_ZERO,
+						true);
 					unlock_page(page);
 					goto next_page;
 				}
@@ -336,8 +338,9 @@ int ext4_mpage_readpages(struct inode *inode,
 			}
 		}
 		if (first_hole != blocks_per_page) {
-			zero_user_segment(page, first_hole << blkbits,
-					  PAGE_SIZE);
+			pcache_pks_zero_user_segment(page,
+					first_hole << blkbits, PAGE_SIZE,
+					PKS_SITE_READ_ZERO, true);
 			if (first_hole == 0) {
 				if (ext4_need_verity(inode, page->index) &&
 				    !fsverity_verify_page(page))
@@ -393,10 +396,16 @@ int ext4_mpage_readpages(struct inode *inode,
 			submit_bio(bio);
 			bio = NULL;
 		}
-		if (!PageUptodate(page))
+		if (!PageUptodate(page)) {
+			DEFINE_PCACHE_PKS_SCOPE(pks_scope);
+
+			pcache_pks_scope_begin_fill(&pks_scope,
+						    PKS_SITE_READ_ZERO, page);
 			block_read_full_page(page, ext4_get_block);
-		else
+			pcache_pks_scope_end(&pks_scope);
+		} else {
 			unlock_page(page);
+		}
 	next_page:
 		if (rac)
 			put_page(page);

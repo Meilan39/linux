@@ -3758,9 +3758,20 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 	loff_t pos = iocb->ki_pos;
 	struct address_space *mapping = file->f_mapping;
 	const struct address_space_operations *a_ops = mapping->a_ops;
+	DEFINE_PCACHE_PKS_SCOPE(pks_scope);
 	long status = 0;
 	ssize_t written = 0;
 	unsigned int flags = 0;
+
+	/*
+	 * Buffered writes into protected files copy data through the write
+	 * alias here regardless of VFS entry point. Re-verify write authority
+	 * before opening the scope.
+	 */
+	status = pcache_pks_scope_begin_file(&pks_scope,
+					     PKS_SITE_BUFFERED_WRITE, file);
+	if (status)
+		return status;
 
 	do {
 		struct page *page;
@@ -3827,6 +3838,7 @@ again:
 		balance_dirty_pages_ratelimited(mapping);
 	} while (iov_iter_count(i));
 
+	pcache_pks_scope_end(&pks_scope);
 	return written ? written : status;
 }
 EXPORT_SYMBOL(generic_perform_write);
