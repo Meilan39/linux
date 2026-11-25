@@ -43,6 +43,17 @@ static inline void pks_stat_inc(enum pks_stat_item item)
 
 unsigned long pks_stat_read(enum pks_stat_item item);
 
+/* fault.c */
+enum pks_insn_class {
+	PKS_INSN_STORE,
+	PKS_INSN_STRING,
+	PKS_INSN_RMW,
+	PKS_INSN_OTHER,
+	PKS_NR_INSN_CLASSES,
+};
+
+extern const char * const pks_insn_class_names[PKS_NR_INSN_CLASSES];
+
 /* zone.c */
 struct pks_zone_info {
 	unsigned long tagged_pages;

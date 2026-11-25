@@ -1057,6 +1057,7 @@ static int ext4_block_write_begin(struct page *page, loff_t pos, unsigned len,
 	BUG_ON(to > PAGE_SIZE);
 	BUG_ON(from > to);
 
+	pcache_pks_fill_begin(page);
 	if (!page_has_buffers(page))
 		create_empty_buffers(page, blocksize, 0);
 	head = page_buffers(page);
@@ -3741,6 +3742,7 @@ static int __ext4_block_zero_page_range(handle_t *handle,
 		set_buffer_uptodate(bh);
 
 	if (!buffer_uptodate(bh)) {
+		pcache_pks_fill_begin(page);
 		err = ext4_read_bh_lock(bh, 0, true);
 		if (err)
 			goto unlock;

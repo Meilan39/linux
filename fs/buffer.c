@@ -48,6 +48,7 @@
 #include <linux/sched/mm.h>
 #include <trace/events/block.h>
 #include <linux/fscrypt.h>
+#include <linux/pcache_pks_page.h>
 
 #include "internal.h"
 
@@ -141,6 +142,8 @@ static void buffer_io_error(struct buffer_head *bh, char *msg)
  */
 static void __end_buffer_read_notouch(struct buffer_head *bh, int uptodate)
 {
+	if (uptodate && pcache_pks_fill_failed(bh->b_page))
+		uptodate = 0;
 	if (uptodate) {
 		set_buffer_uptodate(bh);
 	} else {
@@ -252,6 +255,8 @@ static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 	BUG_ON(!buffer_async_read(bh));
 
 	page = bh->b_page;
+	if (uptodate && pcache_pks_fill_failed(page))
+		uptodate = 0;
 	if (uptodate) {
 		set_buffer_uptodate(bh);
 	} else {
@@ -1982,6 +1987,7 @@ int __block_write_begin_int(struct folio *folio, loff_t pos, unsigned len,
 	BUG_ON(to > PAGE_SIZE);
 	BUG_ON(from > to);
 
+	pcache_pks_fill_begin(&folio->page);
 	head = create_page_buffers(&folio->page, inode, 0);
 	blocksize = head->b_size;
 	bbits = block_size_bits(blocksize);

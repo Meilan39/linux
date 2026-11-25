@@ -8,6 +8,7 @@
 #include <linux/pkeys.h>                /* PKEY_*                       */
 #include <linux/pks.h>
 #include <linux/pks-keys.h>
+#include <linux/pcache_pks.h>
 #include <linux/memremap.h>		  /* fault callback               */
 #include <uapi/asm-generic/mman-common.h>
 
@@ -249,6 +250,10 @@ __static_or_pks_test DEFINE_PER_CPU(u32, pkrs_cache);
 static const pks_key_callback pks_key_callbacks[PKS_KEY_MAX] = {
 #ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
 	[PKS_KEY_PGMAP_PROTECTION]   = pgmap_pks_fault_callback,
+#endif
+#ifdef CONFIG_PCACHE_PKS
+	[PKS_KEY_PAGE_CACHE]	     = pcache_pks_fault_callback,
+	[PKS_KEY_PAGE_CACHE_W]	     = pcache_pks_fault_callback,
 #endif
 #ifdef CONFIG_PKS_TEST
 	[PKS_KEY_TEST]		= pks_test_fault_callback,
