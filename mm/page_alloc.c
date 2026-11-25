@@ -9695,7 +9695,8 @@ bool take_page_off_buddy(struct page *page)
 		struct page *page_head = page - (pfn & ((1 << order) - 1));
 		int page_order = buddy_order(page_head);
 
-		if (PageBuddy(page_head) && page_order >= order) {
+		if (PageBuddy(page_head) && page_order >= order &&
+		    page_zone(page_head) == zone) {
 			unsigned long pfn_head = page_to_pfn(page_head);
 			int migratetype = get_pfnblock_migratetype(page_head,
 								   pfn_head);
