@@ -57,11 +57,28 @@ extern const char * const pks_insn_class_names[PKS_NR_INSN_CLASSES];
 /* zone.c */
 struct pks_zone_info {
 	unsigned long tagged_pages;
+	unsigned long pending_pages;
 	unsigned long free_pages;
 };
 
 int pks_zone_init(void);
 void pks_zone_info(struct pks_zone_info *info);
+
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+void pks_zone_reserve(unsigned long bytes);
+bool pks_static_placement(void);
+int pks_naive_init(void);
+void pks_naive_info(struct pks_zone_info *info);
+const char *pks_place_name(void);
+void pks_place_info(struct pks_zone_info *info);
+#else
+static inline void pks_zone_reserve(unsigned long bytes) {}
+static inline bool pks_static_placement(void) { return false; }
+static inline void pks_place_info(struct pks_zone_info *info)
+{
+	pks_zone_info(info);
+}
+#endif
 
 /* debug.c */
 #ifdef CONFIG_PCACHE_PKS_DEBUG

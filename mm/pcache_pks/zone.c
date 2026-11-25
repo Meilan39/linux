@@ -455,7 +455,8 @@ bool pks_zone_grow(struct zone *zone, gfp_t gfp)
 	DEFINE_PCACHE_PKS_SCOPE(scope);
 	unsigned long nr;
 
-	if (!pcache_pks_is_enabled() || !zone_is_initialized(zone))
+	if (!pcache_pks_is_enabled() || !zone_is_initialized(zone) ||
+	    pks_static_placement())
 		return false;
 
 	pcache_pks_scope_clamp(&scope);
@@ -494,7 +495,8 @@ static void pks_balance(struct work_struct *work)
 
 void pks_zone_wake(struct zone *zone)
 {
-	if (pcache_pks_is_enabled() && pks_zone_wq && zone_is_initialized(zone))
+	if (pcache_pks_is_enabled() && pks_zone_wq && zone_is_initialized(zone) &&
+	    !pks_static_placement())
 		queue_work(pks_zone_wq, pks_balance_work + zone_to_nid(zone));
 }
 
@@ -548,7 +550,7 @@ static unsigned long pks_shrink_count(struct shrinker *s,
 {
 	struct zone *zone = NODE_DATA(sc->nid)->node_zones + ZONE_PKS;
 
-	if (!zone_managed_pages(zone))
+	if (!zone_managed_pages(zone) || pks_static_placement())
 		return 0;
 	return pks_spare_pages(zone, pks_pcp_pages(zone));
 }
@@ -603,6 +605,44 @@ void pks_zone_info(struct pks_zone_info *info)
 		info->free_pages += zone_page_state(zone, NR_FREE_PAGES);
 	}
 }
+
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+void __init pks_zone_reserve(unsigned long bytes)
+{
+	unsigned long want = round_up(bytes >> PAGE_SHIFT, pageblock_nr_pages);
+	unsigned long per_node, got = 0;
+	int nr_nodes = num_online_nodes();
+	struct pglist_data *pgdat;
+
+	if (!want || !nr_nodes)
+		return;
+	per_node = max_t(unsigned long, pageblock_nr_pages,
+			 round_up(want / nr_nodes, pageblock_nr_pages));
+	for_each_online_pgdat(pgdat) {
+		struct zone *zone = pgdat->node_zones + ZONE_PKS;
+		unsigned long rem = min(per_node, want - got);
+
+		while (rem) {
+			unsigned long step = min_t(unsigned long, rem,
+						   PKS_PROMOTE_MAX);
+			unsigned long n = pks_promote(zone, GFP_KERNEL, step);
+
+			got += n;
+			rem -= min(rem, n);
+			if (!n)
+				break;
+		}
+		if (got >= want)
+			break;
+	}
+	if (got < want)
+		pr_warn("static placement reserved only %lu of %lu MiB\n",
+			got >> (20 - PAGE_SHIFT), bytes >> 20);
+	else
+		pr_info("static placement reserved %lu MiB\n",
+			got >> (20 - PAGE_SHIFT));
+}
+#endif
 
 int __init pks_zone_init(void)
 {

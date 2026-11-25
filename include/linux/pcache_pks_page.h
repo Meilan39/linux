@@ -16,10 +16,30 @@
 DECLARE_STATIC_KEY_FALSE(pcache_pks_enabled);
 extern unsigned long pcache_pks_alias_delta;
 
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+DECLARE_STATIC_KEY_FALSE(pcache_pks_per_page);
+extern unsigned long *pcache_pks_page_map;
+extern unsigned long pcache_pks_max_pfn;
+
+static inline bool pks_naive_is_page(unsigned long pfn)
+{
+	return pfn < pcache_pks_max_pfn && test_bit(pfn, pcache_pks_page_map);
+}
+
+struct page *pks_naive_alloc(gfp_t gfp, int preferred_nid, nodemask_t *nodemask);
+void pks_naive_free(struct page *page);
+#endif
+
 /* Is page-cache protection active on this boot? */
 static inline bool pcache_pks_is_enabled(void)
 {
 	return static_branch_unlikely(&pcache_pks_enabled);
+}
+
+/* Is @page backed by ZONE_PKS on this boot? */
+static inline bool pcache_pks_zone_page(const struct page *page)
+{
+	return pcache_pks_is_enabled() && page_zonenum(page) == ZONE_PKS;
 }
 
 /*
@@ -30,7 +50,15 @@ static inline bool pcache_pks_is_enabled(void)
  */
 static inline bool pcache_pks_page(const struct page *page)
 {
-	return pcache_pks_is_enabled() && page_zonenum(page) == ZONE_PKS;
+	if (!pcache_pks_is_enabled())
+		return false;
+	if (page_zonenum(page) == ZONE_PKS)
+		return true;
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	if (static_branch_unlikely(&pcache_pks_per_page))
+		return pks_naive_is_page(page_to_pfn(page));
+#endif
+	return false;
 }
 
 /*
@@ -66,6 +94,11 @@ static inline bool pcache_pks_fill_failed(struct page *page)
 struct page;
 
 static inline bool pcache_pks_is_enabled(void)
+{
+	return false;
+}
+
+static inline bool pcache_pks_zone_page(const struct page *page)
 {
 	return false;
 }

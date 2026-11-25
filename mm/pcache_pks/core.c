@@ -21,6 +21,7 @@
 #include <linux/mm.h>
 #include <linux/pks.h>
 #include <linux/printk.h>
+#include <linux/string.h>
 #include <linux/sysfs.h>
 #include "internal.h"
 
@@ -36,6 +37,66 @@ static int __init setup_pcache_pks(char *str)
 	return str ? kstrtobool(str, &pcache_pks_param) : -EINVAL;
 }
 early_param("pcache_pks", setup_pcache_pks);
+
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+enum pks_placement_mode {
+	PKS_PLACE_DYNAMIC,
+	PKS_PLACE_STATIC,
+	PKS_PLACE_NAIVE,
+};
+
+static enum pks_placement_mode pks_place_mode __ro_after_init = PKS_PLACE_DYNAMIC;
+static unsigned long pks_reserve_bytes __ro_after_init = 128UL << 20;
+
+static const char * const pks_place_names[] = {
+	[PKS_PLACE_DYNAMIC]	= "dynamic",
+	[PKS_PLACE_STATIC]	= "static",
+	[PKS_PLACE_NAIVE]	= "naive",
+};
+
+static int __init setup_pcache_pks_placement(char *str)
+{
+	if (!str)
+		return -EINVAL;
+	if (!strcmp(str, "dynamic") || !strcmp(str, "zone"))
+		pks_place_mode = PKS_PLACE_DYNAMIC;
+	else if (!strcmp(str, "static") || !strcmp(str, "prealloc"))
+		pks_place_mode = PKS_PLACE_STATIC;
+	else if (!strcmp(str, "naive"))
+		pks_place_mode = PKS_PLACE_NAIVE;
+	else
+		return -EINVAL;
+	return 0;
+}
+early_param("pcache_pks.placement", setup_pcache_pks_placement);
+
+static int __init setup_pcache_pks_reserve(char *str)
+{
+	if (!str)
+		return -EINVAL;
+	pks_reserve_bytes = memparse(str, &str);
+	return *str ? -EINVAL : 0;
+}
+early_param("pcache_pks.reserve", setup_pcache_pks_reserve);
+
+bool pks_static_placement(void)
+{
+	return pks_place_mode == PKS_PLACE_STATIC;
+}
+
+const char *pks_place_name(void)
+{
+	return pks_place_names[pks_place_mode];
+}
+
+void pks_place_info(struct pks_zone_info *info)
+{
+	if (pks_place_mode == PKS_PLACE_NAIVE)
+		pks_naive_info(info);
+	else
+		pks_zone_info(info);
+}
+#endif
 
 unsigned long pks_stat_read(enum pks_stat_item item)
 {
@@ -74,7 +135,7 @@ static ssize_t tagged_kb_show(struct kobject *kobj,
 {
 	struct pks_zone_info info;
 
-	pks_zone_info(&info);
+	pks_place_info(&info);
 	return sysfs_emit(buf, "%lu\n", info.tagged_pages << (PAGE_SHIFT - 10));
 }
 static struct kobj_attribute tagged_kb_attr = __ATTR_RO(tagged_kb);
@@ -84,12 +145,35 @@ static ssize_t free_kb_show(struct kobject *kobj,
 {
 	struct pks_zone_info info;
 
-	pks_zone_info(&info);
+	pks_place_info(&info);
 	return sysfs_emit(buf, "%lu\n", info.free_pages << (PAGE_SHIFT - 10));
 }
 static struct kobj_attribute free_kb_attr = __ATTR_RO(free_kb);
 
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+static ssize_t placement_show(struct kobject *kobj,
+			      struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%s\n", pks_place_name());
+}
+static struct kobj_attribute placement_attr = __ATTR_RO(placement);
+
+static ssize_t untag_pending_show(struct kobject *kobj,
+				  struct kobj_attribute *attr, char *buf)
+{
+	struct pks_zone_info info;
+
+	pks_place_info(&info);
+	return sysfs_emit(buf, "%lu\n", info.pending_pages);
+}
+static struct kobj_attribute untag_pending_attr = __ATTR_RO(untag_pending);
+#endif
+
 static struct attribute *pcache_pks_attrs[] = {
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	&placement_attr.attr,
+	&untag_pending_attr.attr,
+#endif
 	&tagged_kb_attr.attr,
 	&free_kb_attr.attr,
 	&tag_ops_attr.attr,
@@ -137,15 +221,34 @@ static int __init pcache_pks_init(void)
 
 	if (pks_alias_init())
 		return 0;
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	if (pks_place_mode == PKS_PLACE_NAIVE) {
+		if (pks_naive_init()) {
+			pks_alias_exit();
+			return 0;
+		}
+		goto enabled;
+	}
+#endif
 	if (pks_zone_init()) {
 		pks_alias_exit();
 		return 0;
 	}
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	if (pks_place_mode == PKS_PLACE_STATIC)
+		pks_zone_reserve(pks_reserve_bytes);
+enabled:
+#endif
 
 	static_branch_enable(&pcache_pks_enabled);
 	pcache_pks_sysfs_init();
 	pks_debug_init();
+#ifdef CONFIG_PCACHE_PKS_BASELINES
+	pr_info("page-cache protection enabled (%s placement)\n",
+		pks_place_name());
+#else
 	pr_info("page-cache protection enabled\n");
+#endif
 	return 0;
 }
 subsys_initcall(pcache_pks_init);
